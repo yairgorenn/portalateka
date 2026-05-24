@@ -82,11 +82,9 @@ def process_unified_data(items_list, original_file_name):
                     warnings.append(f"✅ שורה {row_num}: תקין - הומר ממק\"ט יצרן למק\"ט אטקה ({sku_val}).")
 
             # 3. לא קיים בשום מקום
+                    # 3. לא קיים בשום מקום
             else:
-                sku_val = sku_str
-                if len(sku_str) < 7:
-                    warnings.append(f"⚠️ שורה {row_num}: שים לב מקט לא מלא ({sku_str}).")
-                else:
+                    sku_val = sku_str
                     warnings.append(f"❌ שורה {row_num}: מק\"ט לא מוכר במערכת – אנא בדוק ({sku_str}).")
 
         # --- ב) בדיקת כמות ---
