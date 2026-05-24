@@ -55,10 +55,16 @@ if uploaded_file is not None:
         st.error(error)
     else:
         # הצגת אזהרות (אם יש)
+        # הצגת אזהרות (אם יש) עם צבעים לפי האירוע
         if warnings:
-            with st.expander(f"⚠️ נמצאו {len(warnings)} הערות בקובץ (לחצו לצפייה)", expanded=True):
+            with st.expander(f"הערות בקובץ - נמצאו {len(warnings)} הערות (לחצו לצפייה)", expanded=True):
                 for warning in warnings:
-                    st.warning(warning)
+                    if "✅" in warning:
+                        st.success(warning)  # ירוק
+                    elif "❌" in warning:
+                        st.error(warning)  # אדום
+                    else:
+                        st.warning(warning)  # צהוב
 
         st.success("✨ עיבוד הקובץ הסתיים בהצלחה!")
 
