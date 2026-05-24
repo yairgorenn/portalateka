@@ -42,10 +42,9 @@ st.markdown("""
     """, unsafe_allow_html=True)
 
 # --- כותרות וטקסט ---
-st.title("⚙️חברת אטקה - מערכת תיקון קבצי הזמנות")
+st.title("⚙️ מערכת תיקון קבצי הזמנות")
 st.write(
-    "העלו את קובץ ההזמנה שלכם כאן. המערכת תסדר את האפסים במק\"ט ותנקה שורות ריקות או שגויות.")
-st.write("**שימו לב:** שורות ללא כמות תקינה או ללא מק\"ט יימחקו מהקובץ הסופי באופן אוטומטי. שורה ראשונה צריכה להכיל כותרת בלבד")
+    "העלו את קובץ ההזמנה שלכם כאן. המערכת תסדר את האפסים במק\"ט ותבדוק תקינות של כמויות ומק\"טים.")
 
 # רכיב העלאת קובץ
 uploaded_file = st.file_uploader("בחרו קובץ אקסל (xlsx) או CSV", type=["xlsx", "csv"], label_visibility="collapsed")
@@ -62,44 +61,71 @@ if uploaded_file is not None:
         if df.shape[1] < 2:
             st.error("❌ שגיאה: הקובץ חייב להכיל לפחות שתי עמודות (מק\"ט וכמות).")
         else:
-            # לקיחת 2 העמודות הראשונות בלבד ומתן שמות זמניים לעיבוד
-            df_clean = df.iloc[:, [0, 1]].copy()
-            df_clean.columns = ['SKU', 'QTY']
+            # מערכים לשמירת הנתונים המעובדים ורשימות להתראות
+            cleaned_skus = []
+            cleaned_qtys = []
+            qty_warnings = []
+            sku_warnings = []
 
+            # לולאה שעוברת שורה-שורה על הקובץ ומבצעת ולידציה מורחבת
+            for idx, row in df.iterrows():
+                # חישוב מספר השורה האמיתי באקסל (אינדקס 0 הוא שורה 2 באקסל המקורי בגלל skiprows=1)
+                excel_row_num = idx + 2
 
-            # פונקציה לתיקון המק"ט - מחזירה None אם המק"ט לא תקין או ריק
-            def fix_sku(val):
-                if pd.isna(val) or str(val).strip() == "":
-                    return None
-                val_str = str(val).strip()
-                if val_str.endswith('.0'):
-                    val_str = val_str[:-2]
-                return val_str.zfill(SKU_LENGTH)
+                orig_sku = row[0]
+                orig_qty = row[1]
 
+                # --- א) בדיקת תקינות מק"ט ---
+                if pd.isna(orig_sku) or str(orig_sku).strip() == "":
+                    sku_val = ""
+                    sku_warnings.append(f"שים לב מקט לא מלא בשורה {excel_row_num}")
+                else:
+                    sku_str = str(orig_sku).strip()
+                    # ניקוי סיומות .0 שנוצרות לעיתים באקסל
+                    if sku_str.endswith('.0'):
+                        sku_str = sku_str[:-2]
 
-            # פונקציה לניקוי הכמות - מחזירה מספר שלם גדול מ-0. אחרת מחזירה None
-            def fix_qty(val):
-                if pd.isna(val):
-                    return None
-                try:
-                    num = int(float(val))
-                    if num > 0:
-                        return num
-                    return None
-                except:
-                    return None  # למקרה שזה טקסט שלא ניתן להפוך למספר
+                    # חוק חדש: פחות מ-7 תווים נשאר כמו שהוא ומוציא התראה
+                    if len(sku_str) < 7:
+                        sku_val = sku_str
+                        sku_warnings.append(f"שים לב מקט לא מלא בשורה {excel_row_num}")
+                    else:
+                        # 7 תווים ומעלה - משלים עם אפסים משמאל ל-9 ספרות
+                        sku_val = sku_str.zfill(SKU_LENGTH)
 
+                # --- ב) בדיקת תקינות כמות ---
+                qty_is_valid = False
+                qty_val = orig_qty
 
-            # הרצת התיקונים על העמודות
-            df_clean['SKU'] = df_clean['SKU'].apply(fix_sku)
-            df_clean['QTY'] = df_clean['QTY'].apply(fix_qty)
+                if not pd.isna(orig_qty):
+                    try:
+                        # בדיקה האם מדובר במספר (שלם או עשרוני)
+                        qty_float = float(orig_qty)
+                        # בדיקה האם המספר הוא שלם וגדול מ-0
+                        if qty_float.is_integer() and int(qty_float) > 0:
+                            qty_val = int(qty_float)
+                            qty_is_valid = True
+                    except ValueError:
+                        pass  # השארת הערך המקורי כטקסט במידה ונכשל
 
-            # --- מחיקת השורות הלא תקינות ---
-            # פונקציה זו מוחקת כל שורה שיש בה None (כלומר, מק"ט חסר או כמות לא תקינה)
-            df_clean.dropna(subset=['SKU', 'QTY'], inplace=True)
+                # אם הכמות לא תקינה (0, ריק, טקסט, או שבר) - משאירים את השורה ורושמים הערה
+                if not qty_is_valid:
+                    qty_warnings.append(f"שים לב בשורה מספר {excel_row_num} חסר כמות")
+                    if pd.isna(orig_qty):
+                        qty_val = ""
 
-            # קביעת שמות עמודות סופיים לעברית
-            df_clean.columns = ['מק"ט', 'כמות']
+                cleaned_skus.append(sku_val)
+                cleaned_qtys.append(qty_val)
+
+            # בניית ה-DataFrame החדש עם השורות המלאות
+            df_clean = pd.DataFrame({'מק"ט': cleaned_skus, 'כמות': cleaned_qtys})
+
+            # --- הצגת ההתראות למשתמש במידה וקיימות ---
+            all_warnings = qty_warnings + sku_warnings
+            if all_warnings:
+                with st.expander(f"⚠️ נמצאו {len(all_warnings)} הערות בקובץ (לחצו לצפייה)", expanded=True):
+                    for warning in all_warnings:
+                        st.warning(warning)
 
             # יצירת קובץ אקסל חדש בזיכרון
             buffer = io.BytesIO()
@@ -115,7 +141,7 @@ if uploaded_file is not None:
                 worksheet.sheet_properties.pageSetUpPr.fitToPage = True
                 worksheet.sheet_view.rightToLeft = True
 
-                # הגדרת סגנונות
+                # הגדרת סגנונות (פונט Tahoma 14)
                 font_tahoma_regular = Font(name='Tahoma', size=14)
                 font_tahoma_header = Font(name='Tahoma', size=14, bold=True, color='FFFFFF')  # לבן
                 fill_header = PatternFill(start_color='1F497D', end_color='1F497D', fill_type='solid')  # כחול כהה
@@ -135,15 +161,15 @@ if uploaded_file is not None:
                 worksheet.column_dimensions['A'].width = 20
                 worksheet.column_dimensions['B'].width = 15
 
-            st.success("✨ הקובץ נוקה ותוקן בהצלחה! לחצו על הכפתור הירוק למטה כדי להוריד אותו:")
+            st.success("✨ עיבוד הקובץ הסתיים בהצלחה!")
 
-            # דינמיות לשם הקובץ: חילוץ השם המקורי והוספת הטקסט
+            # דינמיות לשם הקובץ: חילוץ השם המקורי והוספת הטקסט החדש
             original_name, _ = os.path.splitext(uploaded_file.name)
             new_file_name = f"{original_name}_מוכן_לפורטל.xlsx"
 
             # כפתור הורדה
             st.download_button(
-                label="⬇️ הורד קובץ מתוקן לפורטל",
+                label="⬇️ הורד קובץ מוכן לפורטל",
                 data=buffer.getvalue(),
                 file_name=new_file_name,
                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
