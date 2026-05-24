@@ -11,7 +11,7 @@ from excel_handler import load_catalog
 class OrderRow(BaseModel):
     row_number: int = Field(description="מספר השורה בטבלה")
     skus_found: list[str] = Field(
-        description="רשימה של כל המק\"טים והקודים שנמצאו בשורה זו (מק\"ט ספק, קוד פריט, מק\"ט אטקה). הכנס לכאן רק מספרים וקודים (למשל EEELE00139 או 2CDS271001R0104). אל תכניס תיאורי מוצר!")
+        description="רשימה של כל המק\"טים והקודים שנמצאו בשורה זו. הכנס לכאן רק מספרים וקודים (למשל EEELE00139 או 2CDS271001R0104). אל תכניס תיאורי מוצר!")
     qty: str = Field(description="הכמות המוזמנת. חובה: התעלם מנקודות עשרוניות (1.00 זה 1). החזר כמספר שלם בפורמט טקסט.")
 
 
@@ -26,12 +26,18 @@ class PurchaseOrder(BaseModel):
 def process_pdf(pdf_file, openai_api_key):
     client = OpenAI(api_key=openai_api_key)
 
+    # חידוש 1: החזרת "סמן הקריאה" של הקובץ להתחלה כדי למנוע קריאת קובץ ריק
+    pdf_file.seek(0)
+
     pdf_document = fitz.open(stream=pdf_file.read(), filetype="pdf")
     base64_images = []
 
     for page_num in range(min(len(pdf_document), 3)):
         page = pdf_document.load_page(page_num)
-        pix = page.get_pixmap(dpi=200)
+
+        # חידוש 2: alpha=False מבטל שקיפות ומכריח רקע לבן, כדי שהטקסט לא יהפוך לשחור על שחור!
+        pix = page.get_pixmap(dpi=200, alpha=False)
+
         img_bytes = pix.tobytes("png")
         encoded = base64.b64encode(img_bytes).decode('utf-8')
         base64_images.append(encoded)
@@ -41,11 +47,11 @@ def process_pdf(pdf_file, openai_api_key):
             "role": "system",
             "content": """אתה מנתח הזמנות רכש (B2B). סרוק את המסמך וחלץ את כל שורות ההזמנה.
             לכל שורה, חלץ את הכמות (מספרים שלמים בלבד, התעלם מאפסים אחרי הנקודה).
-            אסוף את *כל* הקודים / מק"טים שאתה רואה באותה שורה (לא משנה אם זה יצרן או אטקה) לתוך הרשימה skus_found.
+            אסוף את *כל* הקודים / מק"טים שאתה רואה באותה שורה לתוך הרשימה skus_found.
 
             אזהרות חמורות:
-            1. אסור לך לחלוץ את "תיאור המוצר". חלץ אך ורק קודי פריט/מק"טים (רצף אותיות ומספרים קצר).
-            2. חוק ברזל: אסור לך בשום אופן להמציא נתונים (Hallucination) או להשתמש בנתוני דמה כמו 'PO123456' או 'ABC12345'. עליך להחזיר אך ורק את הנתונים המדויקים שמופיעים פיזית בתמונות המצורפות! אם אינך מוצא מק"ט, השאר את הרשימה ריקה."""
+            1. אסור לך לחלוץ את "תיאור המוצר". חלץ אך ורק קודי פריט.
+            2. חוק ברזל: אסור לך להמציא נתונים בשום פנים ואופן. אם התמונות ריקות, שחורות, או שאינך מצליח לקרוא מהן כלום, עליך להחזיר תחת order_number את הטקסט 'ERROR_BLANK_IMAGE' ולהשאיר את רשימת הפריטים ריקה."""
         },
         {
             "role": "user",
@@ -53,7 +59,13 @@ def process_pdf(pdf_file, openai_api_key):
         }
     ]
 
-    # שינוי קריטי למודל החזק והמדויק ביותר של OpenAI (הורדנו את ה-mini)
+    for b64_img in base64_images:
+        messages[1]["content"].append({
+            "type": "image_url",
+            "image_url": {"url": f"data:image/png;base64,{b64_img}"}
+        })
+
+    # אנחנו משתמשים במודל החזק והמדויק (gpt-4o)
     response = client.beta.chat.completions.parse(
         model="gpt-4o",
         messages=messages,
@@ -62,7 +74,7 @@ def process_pdf(pdf_file, openai_api_key):
 
     parsed_data = response.choices[0].message.parsed
 
-    # הדפסה ללוג
+    # הדפסה ללוג לבקרה
     print(f"\n=======================================================")
     print(f"=== פלט גולמי מה-AI (מספר הזמנה: {parsed_data.order_number}) ===")
     for item in parsed_data.items:
@@ -75,6 +87,7 @@ def process_pdf(pdf_file, openai_api_key):
     for item in parsed_data.items:
         chosen_sku = ""
 
+        # סריקה 1: מק"ט אטקה
         for candidate in item.skus_found:
             clean_val = candidate.strip()
             if not clean_val: continue
@@ -82,6 +95,7 @@ def process_pdf(pdf_file, openai_api_key):
                 chosen_sku = clean_val
                 break
 
+                # סריקה 2: מק"ט יצרן
         if not chosen_sku:
             for candidate in item.skus_found:
                 clean_val = candidate.strip()
@@ -91,6 +105,7 @@ def process_pdf(pdf_file, openai_api_key):
                     chosen_sku = clean_val
                     break
 
+                    # סריקה 3: לא מצא כלום בקטלוג
         if not chosen_sku and len(item.skus_found) > 0:
             chosen_sku = item.skus_found[0]
 
