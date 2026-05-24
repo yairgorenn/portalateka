@@ -43,7 +43,9 @@ def process_pdf(pdf_file, openai_api_key):
             לכל שורה, חלץ את הכמות (מספרים שלמים בלבד, התעלם מאפסים אחרי הנקודה).
             אסוף את *כל* הקודים / מק"טים שאתה רואה באותה שורה (לא משנה אם זה יצרן או אטקה) לתוך הרשימה skus_found.
 
-            אזהרה חמורה: אסור לך לחלוץ את "תיאור המוצר" (למשל 'MCB S201M-C10 1x10A' או 'RCCB F204A'). עליך לחלוץ אך ורק את קודי הפריט עצמם, שהם לרוב רצף אלפאנומרי או מספרי קצר יותר (למשל '2CDS271001R0104' או 'EEELE00139')."""
+            אזהרות חמורות:
+            1. אסור לך לחלוץ את "תיאור המוצר". חלץ אך ורק קודי פריט/מק"טים (רצף אותיות ומספרים קצר).
+            2. חוק ברזל: אסור לך בשום אופן להמציא נתונים (Hallucination) או להשתמש בנתוני דמה כמו 'PO123456' או 'ABC12345'. עליך להחזיר אך ורק את הנתונים המדויקים שמופיעים פיזית בתמונות המצורפות! אם אינך מוצא מק"ט, השאר את הרשימה ריקה."""
         },
         {
             "role": "user",
@@ -51,23 +53,21 @@ def process_pdf(pdf_file, openai_api_key):
         }
     ]
 
+    # שינוי קריטי למודל החזק והמדויק ביותר של OpenAI (הורדנו את ה-mini)
     response = client.beta.chat.completions.parse(
-        model="gpt-4o-mini",
+        model="gpt-4o",
         messages=messages,
         response_format=PurchaseOrder,
     )
 
     parsed_data = response.choices[0].message.parsed
 
-    # ==========================================
-    # --- הוספת הדפסה ללוג לצורכי בדיקה ---
-    # ==========================================
+    # הדפסה ללוג
     print(f"\n=======================================================")
     print(f"=== פלט גולמי מה-AI (מספר הזמנה: {parsed_data.order_number}) ===")
     for item in parsed_data.items:
         print(f"שורה {item.row_number}: מק\"טים שנמצאו: {item.skus_found} | כמות: {item.qty}")
     print(f"=======================================================\n")
-    # ==========================================
 
     ateka_set, vendor_to_ateka = load_catalog("PB.csv")
     items_list = []
@@ -75,29 +75,22 @@ def process_pdf(pdf_file, openai_api_key):
     for item in parsed_data.items:
         chosen_sku = ""
 
-        # --- סריקה 1: מחפשים קודם כל מק"ט אטקה בתוך כל המק"טים שה-AI מצא ---
         for candidate in item.skus_found:
             clean_val = candidate.strip()
-            if not clean_val:
-                continue
-
+            if not clean_val: continue
             if clean_val in ateka_set or clean_val.lstrip('0') in ateka_set:
                 chosen_sku = clean_val
                 break
 
-                # --- סריקה 2: אם לא מצאנו אטקה, מחפשים מק"ט יצרן ---
         if not chosen_sku:
             for candidate in item.skus_found:
                 clean_val = candidate.strip()
-                if not clean_val:
-                    continue
-
+                if not clean_val: continue
                 X_upper = clean_val.upper()
                 if X_upper in vendor_to_ateka or X_upper.lstrip('0') in vendor_to_ateka:
                     chosen_sku = clean_val
                     break
 
-                    # --- סריקה 3: אם גם אטקה וגם יצרן לא קיימים בקטלוג ---
         if not chosen_sku and len(item.skus_found) > 0:
             chosen_sku = item.skus_found[0]
 
