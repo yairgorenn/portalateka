@@ -23,12 +23,10 @@ def load_catalog(csv_path="PB.csv"):
         ateka_sku = str(row[0]).strip()
         vendor_sku = str(row[1]).strip()
 
-        # שמירת מק"ט אטקה למערך
         if ateka_sku != 'nan':
-            ateka_set.add(ateka_sku.lstrip('0'))  # בלי אפסים לחיפוש רחב
-            ateka_set.add(ateka_sku)  # עם אפסים מקורי
+            ateka_set.add(ateka_sku.lstrip('0'))
+            ateka_set.add(ateka_sku)
 
-        # שמירת המרת יצרן -> אטקה
         if vendor_sku != 'nan':
             vendor_to_ateka[vendor_sku.upper()] = ateka_sku
             vendor_to_ateka[vendor_sku.upper().lstrip('0')] = ateka_sku
@@ -36,7 +34,121 @@ def load_catalog(csv_path="PB.csv"):
     return ateka_set, vendor_to_ateka
 
 
+def process_unified_data(items_list, original_file_name):
+    """
+    פונקציית הליבה המאוחדת!
+    מקבלת רשימת פריטים ממקור כלשהו (אקסל או AI) ומעבירה בשרשרת החיול.
+    """
+    ateka_set, vendor_to_ateka = load_catalog("PB.csv")
+
+    cleaned_skus = []
+    cleaned_qtys = []
+    warnings = []
+
+    for item in items_list:
+        row_num = item.get('row_num', '?')
+        orig_sku = item.get('sku', '')
+        orig_qty = item.get('qty', '')
+
+        # --- א) לוגיקת מק"ט והצלבת קטלוג ---
+        if pd.isna(orig_sku) or str(orig_sku).strip() == "" or str(orig_sku).strip().lower() == 'nan':
+            sku_val = ""
+            warnings.append(f"⚠️ שורה {row_num}: שים לב - מקט לא מלא (חסר ערך).")
+        else:
+            sku_str = str(orig_sku).strip()
+            if sku_str.endswith('.0'):
+                sku_str = sku_str[:-2]
+
+            X_upper = sku_str.upper()
+            X_no_zeros = sku_str.lstrip('0')
+
+            # 1. בדיקה אם זה מק"ט אטקה
+            if sku_str in ateka_set or X_no_zeros in ateka_set:
+                matched_ateka = sku_str if sku_str in ateka_set else X_no_zeros
+                if matched_ateka.lstrip('0') == '888888':
+                    sku_val = sku_str
+                    warnings.append(f"❌ שורה {row_num}: הפריט לא קיים במערכת אטקה (מקט 888888). הושאר מק\"ט מקורי.")
+                else:
+                    sku_val = matched_ateka.zfill(SKU_LENGTH)
+
+            # 2. בדיקה אם זה מק"ט יצרן
+            elif X_upper in vendor_to_ateka or X_upper.lstrip('0') in vendor_to_ateka:
+                matched_ateka = vendor_to_ateka.get(X_upper) or vendor_to_ateka.get(X_upper.lstrip('0'))
+                if matched_ateka.lstrip('0') == '888888':
+                    sku_val = sku_str
+                    warnings.append(f"❌ שורה {row_num}: הפריט לא קיים במערכת אטקה (מקט 888888). הושאר מק\"ט יצרן.")
+                else:
+                    sku_val = matched_ateka.zfill(SKU_LENGTH)
+                    warnings.append(f"✅ שורה {row_num}: תקין - הומר ממק\"ט יצרן למק\"ט אטקה ({sku_val}).")
+
+            # 3. לא קיים בשום מקום
+            else:
+                sku_val = sku_str
+                if len(sku_str) < 7:
+                    warnings.append(f"⚠️ שורה {row_num}: שים לב מקט לא מלא ({sku_str}).")
+                else:
+                    warnings.append(f"❌ שורה {row_num}: מק\"ט לא מוכר במערכת – אנא בדוק ({sku_str}).")
+
+        # --- ב) בדיקת כמות ---
+        qty_is_valid = False
+        qty_val = orig_qty
+
+        if not pd.isna(orig_qty) and str(orig_qty).strip() != "":
+            try:
+                qty_float = float(orig_qty)
+                if qty_float.is_integer() and int(qty_float) > 0:
+                    qty_val = int(qty_float)
+                    qty_is_valid = True
+            except ValueError:
+                pass
+
+        if not qty_is_valid:
+            warnings.append(f"⚠️ שורה {row_num}: שים לב חסרה כמות תקינה.")
+            if pd.isna(orig_qty) or str(orig_qty).strip() == "":
+                qty_val = ""
+
+        cleaned_skus.append(sku_val)
+        cleaned_qtys.append(qty_val)
+
+    # --- ג) יצירת האקסל ---
+    df_clean = pd.DataFrame({'מק"ט': cleaned_skus, 'כמות': cleaned_qtys})
+    buffer = io.BytesIO()
+    with pd.ExcelWriter(buffer, engine='openpyxl') as writer:
+        df_clean.to_excel(writer, index=False)
+        workbook = writer.book
+        worksheet = workbook.active
+        worksheet.views.sheetView[0].showGridLines = True
+        worksheet.sheet_properties.pageSetUpPr.fitToPage = True
+        worksheet.sheet_view.rightToLeft = True
+
+        font_tahoma_regular = Font(name='Tahoma', size=14)
+        font_tahoma_header = Font(name='Tahoma', size=14, bold=True, color='FFFFFF')
+        fill_header = PatternFill(start_color='1F497D', end_color='1F497D', fill_type='solid')
+        center_align = Alignment(horizontal='center', vertical='center')
+
+        for row in worksheet.iter_rows():
+            for cell in row:
+                cell.alignment = center_align
+                if cell.row == 1:
+                    cell.font = font_tahoma_header
+                    cell.fill = fill_header
+                else:
+                    cell.font = font_tahoma_regular
+
+        worksheet.column_dimensions['A'].width = 20
+        worksheet.column_dimensions['B'].width = 15
+
+    original_name, _ = os.path.splitext(original_file_name)
+    new_file_name = f"{original_name}_מוכן_לפורטל.xlsx"
+
+    return buffer, new_file_name, warnings, None
+
+
 def process_excel(uploaded_file, original_file_name):
+    """
+    פונקציית מעטפת לאקסל: קוראת את הקובץ וממירה אותו לרשימת מילונים
+    שמתאימה לפונקציית הליבה.
+    """
     try:
         if original_file_name.endswith('.csv'):
             df = pd.read_csv(uploaded_file, skiprows=1, header=None)
@@ -46,112 +158,17 @@ def process_excel(uploaded_file, original_file_name):
         if df.shape[1] < 2:
             return None, None, [], "❌ שגיאה: הקובץ חייב להכיל לפחות שתי עמודות (מק\"ט וכמות)."
 
-        # טעינת מסד הנתונים החכם
-        ateka_set, vendor_to_ateka = load_catalog("PB.csv")
-
-        cleaned_skus = []
-        cleaned_qtys = []
-        warnings = []
-
+        # הפיכת ה-DataFrame לרשימה אחידה שהמוח (process_unified_data) יודע לקרוא
+        items_list = []
         for idx, row in df.iterrows():
-            excel_row_num = idx + 2
-            orig_sku = row[0]
-            orig_qty = row[1]
+            items_list.append({
+                'row_num': idx + 2,
+                'sku': row[0],
+                'qty': row[1]
+            })
 
-            # --- א) לוגיקת מק"ט והצלבת קטלוג ---
-            if pd.isna(orig_sku) or str(orig_sku).strip() == "":
-                sku_val = ""
-                warnings.append(f"⚠️ שורה {excel_row_num}: שים לב - מקט לא מלא (חסר ערך).")
-            else:
-                sku_str = str(orig_sku).strip()
-                if sku_str.endswith('.0'):
-                    sku_str = sku_str[:-2]
-
-                X_upper = sku_str.upper()
-                X_no_zeros = sku_str.lstrip('0')
-
-                # 1. בדיקה אם זה מק"ט אטקה קיים
-                if sku_str in ateka_set or X_no_zeros in ateka_set:
-                    matched_ateka = sku_str if sku_str in ateka_set else X_no_zeros
-                    if matched_ateka.lstrip('0') == '888888':
-                        sku_val = sku_str
-                        warnings.append(
-                            f"❌ שורה {excel_row_num}: הפריט לא קיים במערכת אטקה (מקט 888888). הושאר מק\"ט מקורי.")
-                    else:
-                        sku_val = matched_ateka.zfill(SKU_LENGTH)
-
-                # 2. בדיקה אם זה מק"ט יצרן קיים
-                elif X_upper in vendor_to_ateka or X_upper.lstrip('0') in vendor_to_ateka:
-                    matched_ateka = vendor_to_ateka.get(X_upper) or vendor_to_ateka.get(X_upper.lstrip('0'))
-                    if matched_ateka.lstrip('0') == '888888':
-                        sku_val = sku_str
-                        warnings.append(
-                            f"❌ שורה {excel_row_num}: הפריט לא קיים במערכת אטקה (מקט 888888). הושאר מק\"ט יצרן.")
-                    else:
-                        sku_val = matched_ateka.zfill(SKU_LENGTH)
-                        warnings.append(f"✅ שורה {excel_row_num}: תקין - הומר ממק\"ט יצרן למק\"ט אטקה ({sku_val}).")
-
-                # 3. המק"ט לא קיים באטקה ולא ביצרן
-                else:
-                    sku_val = sku_str
-                    if len(sku_str) < 7:
-                        warnings.append(f"⚠️ שורה {excel_row_num}: שים לב מקט לא מלא ({sku_str}).")
-                    else:
-                        warnings.append(f"❌ שורה {excel_row_num}: מק\"ט לא מוכר במערכת – אנא בדוק ({sku_str}).")
-
-            # --- ב) בדיקת כמות ---
-            qty_is_valid = False
-            qty_val = orig_qty
-
-            if not pd.isna(orig_qty):
-                try:
-                    qty_float = float(orig_qty)
-                    if qty_float.is_integer() and int(qty_float) > 0:
-                        qty_val = int(qty_float)
-                        qty_is_valid = True
-                except ValueError:
-                    pass
-
-            if not qty_is_valid:
-                warnings.append(f"⚠️ שורה {excel_row_num}: שים לב חסרה כמות תקינה.")
-                if pd.isna(orig_qty):
-                    qty_val = ""
-
-            cleaned_skus.append(sku_val)
-            cleaned_qtys.append(qty_val)
-
-        # יצירת קובץ אקסל...
-        df_clean = pd.DataFrame({'מק"ט': cleaned_skus, 'כמות': cleaned_qtys})
-        buffer = io.BytesIO()
-        with pd.ExcelWriter(buffer, engine='openpyxl') as writer:
-            df_clean.to_excel(writer, index=False)
-            workbook = writer.book
-            worksheet = workbook.active
-            worksheet.views.sheetView[0].showGridLines = True
-            worksheet.sheet_properties.pageSetUpPr.fitToPage = True
-            worksheet.sheet_view.rightToLeft = True
-
-            font_tahoma_regular = Font(name='Tahoma', size=14)
-            font_tahoma_header = Font(name='Tahoma', size=14, bold=True, color='FFFFFF')
-            fill_header = PatternFill(start_color='1F497D', end_color='1F497D', fill_type='solid')
-            center_align = Alignment(horizontal='center', vertical='center')
-
-            for row in worksheet.iter_rows():
-                for cell in row:
-                    cell.alignment = center_align
-                    if cell.row == 1:
-                        cell.font = font_tahoma_header
-                        cell.fill = fill_header
-                    else:
-                        cell.font = font_tahoma_regular
-
-            worksheet.column_dimensions['A'].width = 20
-            worksheet.column_dimensions['B'].width = 15
-
-        original_name, _ = os.path.splitext(original_file_name)
-        new_file_name = f"{original_name}_מוכן_לפורטל.xlsx"
-
-        return buffer, new_file_name, warnings, None
+        # שליחה לפונקציה המרכזית
+        return process_unified_data(items_list, original_file_name)
 
     except Exception as e:
         return None, None, [], "שגיאה בעיבוד הקובץ. ודאו שהקובץ תקין ושיש בו נתונים החל מהשורה השנייה."
