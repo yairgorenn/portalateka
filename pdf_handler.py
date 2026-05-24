@@ -11,7 +11,7 @@ from excel_handler import load_catalog
 class OrderRow(BaseModel):
     row_number: int = Field(description="מספר השורה בטבלה")
     skus_found: list[str] = Field(
-        description="רשימה של כל המק\"טים והקודים שנמצאו בשורה זו (מק\"ט ספק, קוד פריט, מק\"ט אטקה). הכנס את כולם למערך זה.")
+        description="רשימה של כל המק\"טים והקודים שנמצאו בשורה זו (מק\"ט ספק, קוד פריט, מק\"ט אטקה). הכנס לכאן רק מספרים וקודים (למשל EEELE00139 או 2CDS271001R0104). אל תכניס תיאורי מוצר!")
     qty: str = Field(description="הכמות המוזמנת. חובה: התעלם מנקודות עשרוניות (1.00 זה 1). החזר כמספר שלם בפורמט טקסט.")
 
 
@@ -41,19 +41,15 @@ def process_pdf(pdf_file, openai_api_key):
             "role": "system",
             "content": """אתה מנתח הזמנות רכש (B2B). סרוק את המסמך וחלץ את כל שורות ההזמנה.
             לכל שורה, חלץ את הכמות (מספרים שלמים בלבד, התעלם מאפסים אחרי הנקודה).
-            אסוף את *כל* הקודים / מק"טים שאתה רואה באותה שורה (לא משנה אם זה יצרן או אטקה) לתוך הרשימה skus_found."""
+            אסוף את *כל* הקודים / מק"טים שאתה רואה באותה שורה (לא משנה אם זה יצרן או אטקה) לתוך הרשימה skus_found.
+
+            אזהרה חמורה: אסור לך לחלוץ את "תיאור המוצר" (למשל 'MCB S201M-C10 1x10A' או 'RCCB F204A'). עליך לחלוץ אך ורק את קודי הפריט עצמם, שהם לרוב רצף אלפאנומרי או מספרי קצר יותר (למשל '2CDS271001R0104' או 'EEELE00139')."""
         },
         {
             "role": "user",
             "content": [{"type": "text", "text": "פענח את הזמנת הרכש המצורפת."}]
         }
     ]
-
-    for b64_img in base64_images:
-        messages[1]["content"].append({
-            "type": "image_url",
-            "image_url": {"url": f"data:image/png;base64,{b64_img}"}
-        })
 
     response = client.beta.chat.completions.parse(
         model="gpt-4o-mini",
@@ -62,11 +58,20 @@ def process_pdf(pdf_file, openai_api_key):
     )
 
     parsed_data = response.choices[0].message.parsed
-    ateka_set, vendor_to_ateka = load_catalog("PB.csv")
 
+    # ==========================================
+    # --- הוספת הדפסה ללוג לצורכי בדיקה ---
+    # ==========================================
+    print(f"\n=======================================================")
+    print(f"=== פלט גולמי מה-AI (מספר הזמנה: {parsed_data.order_number}) ===")
+    for item in parsed_data.items:
+        print(f"שורה {item.row_number}: מק\"טים שנמצאו: {item.skus_found} | כמות: {item.qty}")
+    print(f"=======================================================\n")
+    # ==========================================
+
+    ateka_set, vendor_to_ateka = load_catalog("PB.csv")
     items_list = []
 
-    # הלוגיקה שבקשת: מעבר על כל שורה לפי סדר עדיפויות קפדני
     for item in parsed_data.items:
         chosen_sku = ""
 
@@ -78,9 +83,9 @@ def process_pdf(pdf_file, openai_api_key):
 
             if clean_val in ateka_set or clean_val.lstrip('0') in ateka_set:
                 chosen_sku = clean_val
-                break  # מצאנו אטקה! עוצרים את החיפוש לשורה זו.
+                break
 
-        # --- סריקה 2: אם לא מצאנו אטקה, מחפשים מק"ט יצרן ---
+                # --- סריקה 2: אם לא מצאנו אטקה, מחפשים מק"ט יצרן ---
         if not chosen_sku:
             for candidate in item.skus_found:
                 clean_val = candidate.strip()
@@ -90,11 +95,11 @@ def process_pdf(pdf_file, openai_api_key):
                 X_upper = clean_val.upper()
                 if X_upper in vendor_to_ateka or X_upper.lstrip('0') in vendor_to_ateka:
                     chosen_sku = clean_val
-                    break  # מצאנו יצרן! עוצרים.
+                    break
 
-        # --- סריקה 3: אם גם אטקה וגם יצרן לא קיימים בקטלוג ---
+                    # --- סריקה 3: אם גם אטקה וגם יצרן לא קיימים בקטלוג ---
         if not chosen_sku and len(item.skus_found) > 0:
-            chosen_sku = item.skus_found[0]  # לוקחים משהו כדי שהמערכת תצעק עליו שגיאה אדומה
+            chosen_sku = item.skus_found[0]
 
         items_list.append({
             'row_num': item.row_number,
