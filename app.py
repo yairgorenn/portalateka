@@ -65,8 +65,14 @@ if uploaded_file is not None:
                     if st.button("🚀 התחל פענוח AI למסמך"):
                         with st.spinner('רובוט ה-AI קורא את המסמך ומחפש מק"טים, זה עשוי לקחת מספר שניות...'):
                             try:
-                                items_list, order_number = process_pdf(uploaded_file, OPENAI_API_KEY)
+                                items_list, order_number, is_scanned = process_pdf(uploaded_file, OPENAI_API_KEY)
                                 original_name = f"Order_{order_number}" if order_number else "Scanned_PDF"
+
+                                # אם זה קובץ סרוק (תמונה), מוסיפים אזהרה חמורה למערך ההערות
+                                if is_scanned:
+                                    scanned_warning = "⚠️ אזהרה חמורה: הנתונים חולצו מתוך תמונה/סריקה (לא חד-ערכי). חובה לעבור שורה-שורה בקובץ המקורי ולוודא שהמק\"טים והכמויות זוהו נכון!"
+                                    st.error(scanned_warning)
+
                                 buffer, new_file_name, warnings, error = process_unified_data(items_list,
                                                                                               f"{original_name}.xlsx")
 
