@@ -24,12 +24,14 @@ st.markdown("""
 st.title("⚙️ מערכת חכמה לקליטת הזמנות")
 st.write("העלו קובץ Excel, CSV או **PDF**. המערכת תבדוק מק\"טים ותכין קובץ נקי לפורטל אטקה.")
 
-uploaded_file = st.file_uploader("בחרו קובץ", type=["xlsx", "csv", "pdf"], label_visibility="collapsed")
+# הרחבנו את סוגי הקבצים לתמיכה בתמונות!
+uploaded_file = st.file_uploader("בחרו קובץ", type=["xlsx", "csv", "pdf", "png", "jpg", "jpeg"],
+                                 label_visibility="collapsed")
 
 if uploaded_file is not None:
     file_ext = uploaded_file.name.lower().split('.')[-1]
 
-    # --- מסלול 1: אקסל/CSV (חינמי ומהיר, ללא סיסמה) ---
+    # --- מסלול 1: אקסל/CSV ---
     if file_ext in ['xlsx', 'csv']:
         with st.spinner('מעבד קובץ, אנא המתן...'):
             buffer, new_file_name, warnings, error = process_excel(uploaded_file, uploaded_file.name)
@@ -50,9 +52,9 @@ if uploaded_file is not None:
                 st.download_button(label="⬇️ הורד קובץ מוכן לפורטל", data=buffer.getvalue(), file_name=new_file_name,
                                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
 
-    # --- מסלול 2: PDF (דורש AI וסיסמה) ---
-    elif file_ext == 'pdf':
-        st.info("ℹ️ פענוח מסמכי PDF דורש הרשאה מיוחדת.")
+    # --- מסלול 2: PDF ותמונות (דורש AI וסיסמה) ---
+    elif file_ext in ['pdf', 'png', 'jpg', 'jpeg']:
+        st.info("ℹ️ פענוח מסמכים חכמים / תמונות דורש הרשאה מיוחדת.")
         user_password = st.text_input("הזן סיסמת מורשה:", type="password")
 
         if user_password:
@@ -62,16 +64,27 @@ if uploaded_file is not None:
                 if not OPENAI_API_KEY:
                     st.error("❌ תקלת שרת: מפתח API לא מוגדר ב-Railway. אנא פנה למנהל המערכת.")
                 else:
-                    if st.button("🚀 התחל פענוח AI למסמך"):
-                        with st.spinner('רובוט ה-AI קורא את המסמך ומחפש מק"טים, זה עשוי לקחת מספר שניות...'):
+                    if st.button("🚀 התחל פענוח AI"):
+                        with st.spinner('רובוט ה-AI קורא את המסמך, זה עשוי לקחת מספר שניות...'):
                             try:
-                                items_list, order_number, is_scanned = process_pdf(uploaded_file, OPENAI_API_KEY)
-                                original_name = f"Order_{order_number}" if order_number else "Scanned_PDF"
+                                if file_ext == 'pdf':
+                                    items_list, order_number, is_scanned = process_pdf(uploaded_file, OPENAI_API_KEY)
+                                else:
+                                    # אם הועלתה תמונה ישירות
+                                    from image_handler import process_images
+                                    import base64
 
-                                # אם זה קובץ סרוק (תמונה), מוסיפים אזהרה חמורה למערך ההערות
+                                    img_bytes = uploaded_file.getvalue()
+                                    st.image(img_bytes, caption="תמונה נסרקת", use_container_width=True)
+                                    encoded = base64.b64encode(img_bytes).decode('utf-8')
+                                    items_list, order_number = process_images([encoded], OPENAI_API_KEY)
+                                    is_scanned = True
+
+                                original_name = f"Order_{order_number}" if order_number else "Scanned_Document"
+
                                 if is_scanned:
-                                    scanned_warning = "⚠️ אזהרה חמורה: הנתונים חולצו מתוך תמונה/סריקה (לא חד-ערכי). חובה לעבור שורה-שורה בקובץ המקורי ולוודא שהמק\"טים והכמויות זוהו נכון!"
-                                    st.error(scanned_warning)
+                                    st.error(
+                                        "⚠️ אזהרה חמורה: הנתונים חולצו מתוך תמונה/סריקה (לא חד-ערכי). חובה לעבור שורה-שורה בקובץ המקורי ולוודא שהמק\"טים והכמויות זוהו נכון!")
 
                                 buffer, new_file_name, warnings, error = process_unified_data(items_list,
                                                                                               f"{original_name}.xlsx")
@@ -89,12 +102,12 @@ if uploaded_file is not None:
                                                     st.error(warning)
                                                 else:
                                                     st.warning(warning)
-                                    st.success("✨ ה-PDF פוענח בהצלחה!")
+                                    st.success("✨ המסמך פוענח בהצלחה!")
                                     st.download_button(label="⬇️ הורד קובץ מוכן לפורטל", data=buffer.getvalue(),
                                                        file_name=new_file_name,
                                                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
                             except Exception as e:
-                                st.error(f"❌ שגיאה בפענוח ה-PDF: {e}")
+                                st.error(f"❌ שגיאה בפענוח המסמך: {e}")
 
 # תחתית הדף
 st.write("")
