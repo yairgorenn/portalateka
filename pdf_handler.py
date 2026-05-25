@@ -1,17 +1,18 @@
 import fitz  # PyMuPDF
 import base64
+import streamlit as st
 from openai import OpenAI
 from pydantic import BaseModel, Field
 from excel_handler import load_catalog
 
 
 # ==========================================
-# 1. הגדרת המבנה - הוספנו "פח אשפה" לתיאור!
+# 1. הגדרת המבנה - ה-AI מפריד תיאורים למקום נפרד
 # ==========================================
 class OrderRow(BaseModel):
     row_number: int = Field(description="מספר השורה בטבלה")
     product_description: str = Field(
-        description="תיאור המוצר המלא (למשל 'MCB S201M-C10' או 'X1TC 3P...'). חובה לחלוץ אותו לשדה זה בלבד, כדי לא ללכלך את המק\"טים!")
+        description="תיאור המוצר המלא (למשל 'MCB S201M-C10' או 'X1TC 3P...'). חובה לחלוץ אותו לשדה זה בלבד!")
     skus_found: list[str] = Field(
         description="רשימת המק\"טים/קודים בלבד. קודים רציפים (כמו EEELE00139 או 2CDS271001R0104).")
     qty: str = Field(description="הכמות המוזמנת. חובה: התעלם מנקודות עשרוניות (1.00 זה 1). החזר כמספר שלם בפורמט טקסט.")
@@ -23,20 +24,31 @@ class PurchaseOrder(BaseModel):
 
 
 # ==========================================
-# 2. הפונקציה המרכזית - הסינון החכם בפייתון
+# 2. הפונקציה המרכזית
 # ==========================================
 def process_pdf(pdf_file, openai_api_key):
     client = OpenAI(api_key=openai_api_key)
 
-    pdf_file.seek(0)
-    pdf_document = fitz.open(stream=pdf_file.read(), filetype="pdf")
+    # התיקון הקריטי: קריאת הביטים בצורה בטוחה מ-Streamlit
+    file_bytes = pdf_file.getvalue()
+
+    if not file_bytes:
+        raise Exception("הקובץ שהועלה ריק (0 bytes).")
+
+    pdf_document = fitz.open(stream=file_bytes, filetype="pdf")
     base64_images = []
+
+    # תצוגה מקדימה לאתר (הברקה שלך!)
+    st.info("👀 מציג את התמונות כפי שהן נשלחות ל-AI (לצורכי בקרת איכות):")
 
     for page_num in range(min(len(pdf_document), 3)):
         page = pdf_document.load_page(page_num)
-        # רזולוציה גבוהה (300) ורקע לבן לזיהוי אותיות קטנות (L לעומת B)
         pix = page.get_pixmap(dpi=300, alpha=False)
         img_bytes = pix.tobytes("png")
+
+        # הדפסת התמונה ישירות למסך האתר!
+        st.image(img_bytes, caption=f"עמוד {page_num + 1} נסרק ונשלח", use_container_width=True)
+
         encoded = base64.b64encode(img_bytes).decode('utf-8')
         base64_images.append(encoded)
 
@@ -48,13 +60,19 @@ def process_pdf(pdf_file, openai_api_key):
 
             אזהרות חמורות:
             1. רשימת skus_found צריכה להכיל רק קודים רציפים!
-            2. אל תמציא נתונים. אם התמונה ריקה, החזר תחת order_number את הטקסט 'ERROR_BLANK_IMAGE'."""
+            2. אל תמציא נתונים. אם התמונה ריקה או בלתי קריאה, החזר תחת order_number את הטקסט 'ERROR_BLANK_IMAGE'."""
         },
         {
             "role": "user",
             "content": [{"type": "text", "text": "פענח את הזמנת הרכש המצורפת."}]
         }
     ]
+
+    for b64_img in base64_images:
+        messages[1]["content"].append({
+            "type": "image_url",
+            "image_url": {"url": f"data:image/png;base64,{b64_img}"}
+        })
 
     response = client.beta.chat.completions.parse(
         model="gpt-4o",
@@ -64,7 +82,6 @@ def process_pdf(pdf_file, openai_api_key):
 
     parsed_data = response.choices[0].message.parsed
 
-    # לוג לבקרה
     print(f"\n=======================================================")
     print(f"=== פלט גולמי מה-AI (מספר הזמנה: {parsed_data.order_number}) ===")
     for item in parsed_data.items:
@@ -78,10 +95,9 @@ def process_pdf(pdf_file, openai_api_key):
     for item in parsed_data.items:
         chosen_sku = ""
 
-        # --- סינון ראשוני: העפת תיאורים שהסתננו ---
+        # סינון ראשוני: העפת תיאורים שהסתננו לרשימת המק"טים (מסנן רווחים)
         valid_skus = []
         for candidate in item.skus_found:
-            # אם יש יותר מרווח אחד, זה בטוח תיאור ולא מק"ט
             if candidate.count(' ') > 1:
                 continue
             valid_skus.append(candidate)
@@ -91,7 +107,6 @@ def process_pdf(pdf_file, openai_api_key):
             clean_val = candidate.strip()
             if not clean_val: continue
 
-            # ניקוי רווחים ומקווים לפני בדיקה
             clean_to_check = clean_val.replace(" ", "").replace("-", "")
             if clean_to_check in ateka_set or clean_to_check.lstrip('0') in ateka_set:
                 chosen_sku = clean_val
@@ -108,7 +123,7 @@ def process_pdf(pdf_file, openai_api_key):
                     chosen_sku = clean_val
                     break
 
-                    # סריקה 3: לא מצא כלום בקטלוג
+                    # סריקה 3: לא מצא כלום
         if not chosen_sku and len(valid_skus) > 0:
             chosen_sku = valid_skus[0]
 

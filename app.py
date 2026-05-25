@@ -7,7 +7,7 @@ from pdf_handler import process_pdf
 # משיכת מפתח ה-API ממשתני הסביבה של השרת (Railway)
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 # סיסמת הגישה שהגדרת לפענוח
-PDF_PASSWORD = "123987"
+PDF_PASSWORD = "9876"
 
 st.set_page_config(page_title="חברת אטקה - מתקן קבצי הזמנה", page_icon="⚙️", layout="centered")
 
