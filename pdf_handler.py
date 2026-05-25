@@ -36,7 +36,7 @@ def process_pdf(pdf_file, openai_api_key):
         page = pdf_document.load_page(page_num)
 
         # חידוש 2: alpha=False מבטל שקיפות ומכריח רקע לבן, כדי שהטקסט לא יהפוך לשחור על שחור!
-        pix = page.get_pixmap(dpi=200, alpha=False)
+        pix = page.get_pixmap(dpi=300, alpha=False)
 
         img_bytes = pix.tobytes("png")
         encoded = base64.b64encode(img_bytes).decode('utf-8')

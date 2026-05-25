@@ -21,7 +21,7 @@ def load_catalog(csv_path="PB.csv"):
     df = pd.read_csv(csv_path, header=None, dtype=str)
     for _, row in df.iterrows():
         ateka_sku = str(row[0]).strip()
-        vendor_sku = str(row[1]).strip()
+        vendor_sku = str(row[1]).replace(" ", "").replace("-", "").strip()
 
         if ateka_sku != 'nan':
             ateka_set.add(ateka_sku.lstrip('0'))
@@ -59,8 +59,9 @@ def process_unified_data(items_list, original_file_name):
             if sku_str.endswith('.0'):
                 sku_str = sku_str[:-2]
 
-            X_upper = sku_str.upper()
-            X_no_zeros = sku_str.lstrip('0')
+            clean_sku = sku_str.replace(" ", "").replace("-", "")
+            X_upper = clean_sku.upper()
+            X_no_zeros = clean_sku.lstrip('0')
 
             # 1. בדיקה אם זה מק"ט אטקה
             if sku_str in ateka_set or X_no_zeros in ateka_set:
