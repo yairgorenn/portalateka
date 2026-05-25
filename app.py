@@ -24,9 +24,8 @@ st.markdown("""
 st.title("⚙️ מערכת חכמה לקליטת הזמנות")
 st.write("העלו קובץ Excel, CSV או **PDF**. המערכת תבדוק מק\"טים ותכין קובץ נקי לפורטל אטקה.")
 
-# הרחבנו את סוגי הקבצים לתמיכה בתמונות!
-uploaded_file = st.file_uploader("בחרו קובץ", type=["xlsx", "csv", "pdf", "png", "jpg", "jpeg"],
-                                 label_visibility="collapsed")
+# המערכת מקבלת רק קבצי מקור - הורדנו תמיכה ב-png/jpg
+uploaded_file = st.file_uploader("בחרו קובץ", type=["xlsx", "csv", "pdf"], label_visibility="collapsed")
 
 if uploaded_file is not None:
     file_ext = uploaded_file.name.lower().split('.')[-1]
@@ -52,9 +51,9 @@ if uploaded_file is not None:
                 st.download_button(label="⬇️ הורד קובץ מוכן לפורטל", data=buffer.getvalue(), file_name=new_file_name,
                                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
 
-    # --- מסלול 2: PDF ותמונות (דורש AI וסיסמה) ---
-    elif file_ext in ['pdf', 'png', 'jpg', 'jpeg']:
-        st.info("ℹ️ פענוח מסמכים חכמים / תמונות דורש הרשאה מיוחדת.")
+    # --- מסלול 2: PDF ---
+    elif file_ext == 'pdf':
+        st.info("ℹ️ פענוח מסמכי PDF דורש הרשאה מיוחדת.")
         user_password = st.text_input("הזן סיסמת מורשה:", type="password")
 
         if user_password:
@@ -65,26 +64,10 @@ if uploaded_file is not None:
                     st.error("❌ תקלת שרת: מפתח API לא מוגדר ב-Railway. אנא פנה למנהל המערכת.")
                 else:
                     if st.button("🚀 התחל פענוח AI"):
-                        with st.spinner('רובוט ה-AI קורא את המסמך, זה עשוי לקחת מספר שניות...'):
+                        with st.spinner('המערכת שולפת נתונים דיגיטליים, אנא המתן...'):
                             try:
-                                if file_ext == 'pdf':
-                                    items_list, order_number, is_scanned = process_pdf(uploaded_file, OPENAI_API_KEY)
-                                else:
-                                    # אם הועלתה תמונה ישירות
-                                    from image_handler import process_images
-                                    import base64
-
-                                    img_bytes = uploaded_file.getvalue()
-                                    st.image(img_bytes, caption="תמונה נסרקת", use_container_width=True)
-                                    encoded = base64.b64encode(img_bytes).decode('utf-8')
-                                    items_list, order_number = process_images([encoded], OPENAI_API_KEY)
-                                    is_scanned = True
-
-                                original_name = f"Order_{order_number}" if order_number else "Scanned_Document"
-
-                                if is_scanned:
-                                    st.error(
-                                        "⚠️ אזהרה חמורה: הנתונים חולצו מתוך תמונה/סריקה (לא חד-ערכי). חובה לעבור שורה-שורה בקובץ המקורי ולוודא שהמק\"טים והכמויות זוהו נכון!")
+                                items_list, order_number = process_pdf(uploaded_file, OPENAI_API_KEY)
+                                original_name = f"Order_{order_number}" if order_number else "Digital_PDF"
 
                                 buffer, new_file_name, warnings, error = process_unified_data(items_list,
                                                                                               f"{original_name}.xlsx")
@@ -106,8 +89,16 @@ if uploaded_file is not None:
                                     st.download_button(label="⬇️ הורד קובץ מוכן לפורטל", data=buffer.getvalue(),
                                                        file_name=new_file_name,
                                                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+                            except ValueError as ve:
+                                # כאן אנחנו תופסים את חסימת הסריקה!
+                                if str(ve) == "SCANNED_PDF_BLOCKED":
+                                    st.error("🛑 **שגיאה: זוהה מסמך סרוק או תמונה.**")
+                                    st.warning(
+                                        "מערכת אטקה מקבלת קבצי Excel, CSV או PDF **דיגיטליים מקוריים בלבד** למניעת טעויות באספקה. אנא בקש מהלקוח להפיק את ה-PDF ישירות ממערכת ה-ERP שלו.")
+                                else:
+                                    st.error(f"❌ שגיאה: {ve}")
                             except Exception as e:
-                                st.error(f"❌ שגיאה בפענוח המסמך: {e}")
+                                st.error(f"❌ תקלה בלתי צפויה: {e}")
 
 # תחתית הדף
 st.write("")
