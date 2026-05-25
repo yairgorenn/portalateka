@@ -8,11 +8,10 @@ from excel_handler import load_catalog
 # 1. הגדרת המבנה - עם חוקים נוקשים נגד הזיות
 # ==========================================
 class OrderRow(BaseModel):
-    row_number: int = Field(description="מספר השורה בטבלה")
+    row_number: int = Field(description="מספר השורה")
     product_description: str = Field(description="תיאור המוצר המלא.")
-    skus_found: list[str] = Field(
-        description="רשימת המק\"טים. אם הטקסט מטושטש אפילו קצת ואתה לא בטוח, הכנס את הערך 'ERROR_UNCLEAR_TEXT'. אל תנחש!")
-    qty: str = Field(description="הכמות המוזמנת.")
+    skus_found: list[str] = Field(description="רשימת המק\"טים. חובה להעתיק במדויק!")
+    qty: str = Field(description="הכמות המוזמנת. חוק ברזל: עליך להחזיר רק את המספר המדויק כמספר שלם! התעלם ממילים כמו 'יח' או אחוזים, והתעלם מאפסים אחרי הנקודה (למשל '8.00' נרשם כ-'8').")
 
 
 class PurchaseOrder(BaseModel):

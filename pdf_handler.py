@@ -11,7 +11,7 @@ class OrderRow(BaseModel):
     row_number: int = Field(description="מספר השורה")
     product_description: str = Field(description="תיאור המוצר המלא.")
     skus_found: list[str] = Field(description="רשימת המק\"טים. חובה להעתיק במדויק!")
-    qty: str = Field(description="הכמות המוזמנת.")
+    qty: str = Field(description="הכמות המוזמנת. חוק ברזל: עליך להחזיר רק את המספר המדויק כמספר שלם! התעלם ממילים כמו 'יח' או אחוזים, והתעלם מאפסים אחרי הנקודה (למשל '8.00' נרשם כ-'8').")
 
 
 class PurchaseOrder(BaseModel):
@@ -41,8 +41,10 @@ def process_pdf(pdf_file, openai_api_key):
         messages = [
             {
                 "role": "system",
-                "content": """אתה מנתח הזמנות רכש (B2B). הפרד בין "תיאור המוצר" לקודים/מק"טים.
-                חוק ברזל: העתק את המק"טים בדיוק מוחלט!"""
+                "content": """אתה מנתח הזמנות רכש (B2B). הפרד בין "תיאור המוצר" לקודים/מק"טים ולכמות.
+                        חוקי ברזל: 
+                        1. העתק את המק"טים בדיוק מוחלט!
+                        2. בשדה הכמות (qty) חלץ אך ורק את המספר השלם (ללא מילים כמו 'יח' וללא נקודות עשרוניות)."""
             },
             {
                 "role": "user",
