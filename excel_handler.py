@@ -88,11 +88,10 @@ def process_unified_data(items_list, original_file_name):
                     warnings.append(f"✅ שורה {row_num}: תקין - הומר ממק\"ט יצרן למק\"ט אטקה ({sku_val}).")
 
             # 3. לא קיים בשום מקום
-                    # 3. לא קיים בשום מקום
             else:
-                    sku_val = sku_str
-                    warnings.append(f"❌ שורה {row_num}: מק\"ט לא מוכר במערכת – אנא בדוק ({sku_str}).")
-                    is_error = True
+                sku_val = sku_str
+                warnings.append(f"❌ שורה {row_num}: מק\"ט לא מוכר במערכת – אנא בדוק ({sku_str}).")
+                is_error = True
 
         # --- ב) בדיקת כמות ---
         qty_is_valid = False
@@ -117,51 +116,49 @@ def process_unified_data(items_list, original_file_name):
         cleaned_qtys.append(qty_val)
         row_has_error.append(is_error)
 
-        # --- ג) יצירת האקסל ---
-        df_clean = pd.DataFrame({'מק"ט': cleaned_skus, 'כמות': cleaned_qtys})
-        buffer = io.BytesIO()
-        with pd.ExcelWriter(buffer, engine='openpyxl') as writer:
-            df_clean.to_excel(writer, index=False)
-            workbook = writer.book
-            worksheet = workbook.active
-            worksheet.views.sheetView[0].showGridLines = True
-            worksheet.sheet_properties.pageSetUpPr.fitToPage = True
-            worksheet.sheet_view.rightToLeft = True
+    # --- ג) יצירת האקסל (הוזז שמאלה כדי שירוץ אחרי הלולאה!) ---
+    df_clean = pd.DataFrame({'מק"ט': cleaned_skus, 'כמות': cleaned_qtys})
+    buffer = io.BytesIO()
+    with pd.ExcelWriter(buffer, engine='openpyxl') as writer:
+        df_clean.to_excel(writer, index=False)
+        workbook = writer.book
+        worksheet = workbook.active
+        worksheet.views.sheetView[0].showGridLines = True
+        worksheet.sheet_properties.pageSetUpPr.fitToPage = True
+        worksheet.sheet_view.rightToLeft = True
 
-            font_tahoma_regular = Font(name='Tahoma', size=14)
-            font_tahoma_header = Font(name='Tahoma', size=14, bold=True, color='FFFFFF')
+        font_tahoma_regular = Font(name='Tahoma', size=14)
+        font_tahoma_header = Font(name='Tahoma', size=14, bold=True, color='FFFFFF')
 
-            # הגדרת הצבעים
-            fill_header = PatternFill(start_color='1F497D', end_color='1F497D', fill_type='solid')
-            fill_warning = PatternFill(start_color='FFD580', end_color='FFD580',
-                                       fill_type='solid')  # <--- צבע כתום בהיר לשגיאות
+        # הגדרת הצבעים
+        fill_header = PatternFill(start_color='1F497D', end_color='1F497D', fill_type='solid')
+        fill_warning = PatternFill(start_color='FFD580', end_color='FFD580', fill_type='solid')
 
-            center_align = Alignment(horizontal='center', vertical='center')
+        center_align = Alignment(horizontal='center', vertical='center')
 
-            for row in worksheet.iter_rows():
-                for cell in row:
-                    cell.alignment = center_align
+        for row in worksheet.iter_rows():
+            for cell in row:
+                cell.alignment = center_align
 
-                    if cell.row == 1:
-                        # שורת הכותרת (שורה 1)
-                        cell.font = font_tahoma_header
-                        cell.fill = fill_header
-                    else:
-                        # שורות הנתונים
-                        cell.font = font_tahoma_regular
+                if cell.row == 1:
+                    # שורת הכותרת (שורה 1)
+                    cell.font = font_tahoma_header
+                    cell.fill = fill_header
+                else:
+                    # שורות הנתונים
+                    cell.font = font_tahoma_regular
 
-                        # בדיקה האם השורה הזו סומנה עם תקלה (עושים פחות 2 כי שורה 1 זה כותרת והאינדקס מתחיל מ-0)
-                        if row_has_error[cell.row - 2]:
-                            cell.fill = fill_warning  # צביעה בכתום
+                    # בדיקה האם השורה הזו סומנה עם תקלה
+                    if row_has_error[cell.row - 2]:
+                        cell.fill = fill_warning  # צביעה בכתום
 
-            worksheet.column_dimensions['A'].width = 20
-            worksheet.column_dimensions['B'].width = 15
+        worksheet.column_dimensions['A'].width = 20
+        worksheet.column_dimensions['B'].width = 15
 
-        original_name, _ = os.path.splitext(original_file_name)
-        new_file_name = f"{original_name}_מוכן_לפורטל.xlsx"
+    original_name, _ = os.path.splitext(original_file_name)
+    new_file_name = f"{original_name}_מוכן_לפורטל.xlsx"
 
-        return buffer, new_file_name, warnings, None
-
+    return buffer, new_file_name, warnings, None
 
 def process_excel(uploaded_file, original_file_name):
     """
