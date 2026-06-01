@@ -60,56 +60,48 @@ if uploaded_file is not None:
             if user_password != PDF_PASSWORD:
                 st.error("❌ סיסמה שגויה.")
             else:
-                # בחירת מנוע עיבוד!
-                engine_choice = st.radio("בחר מנוע פענוח:",
-                                         ["מנוע 100% ודאות (מתמטי/ללא AI)", "מנוע AI (לזיהוי תיאורים מורכבים)"])
-
-                if st.button("🚀 התחל פענוח"):
-                    with st.spinner('המערכת סורקת את המסמך, אנא המתן...'):
-                        try:
-                            # בחירת מסלול
-                            if "100%" in engine_choice:
-                                from pdf_exact_extractor import process_pdf_exact
-
-                                items_list, order_number = process_pdf_exact(uploaded_file)
-                            else:
+                if not OPENAI_API_KEY:
+                    st.error("❌ תקלת שרת: מפתח API לא מוגדר ב-Railway. אנא פנה למנהל המערכת.")
+                else:
+                    if st.button("🚀 התחל פענוח AI"):
+                        with st.spinner('המנוע קורא את המסמך ומעגן שורות, זה עשוי לקחת מספר שניות...'):
+                            try:
+                                # ייבוא ישיר של מנוע ה-AI המשופר בלבד
                                 from pdf_handler import process_pdf
 
-                                if not OPENAI_API_KEY:
-                                    st.error("❌ מפתח AI חסר.")
-                                    st.stop()
                                 items_list, order_number = process_pdf(uploaded_file, OPENAI_API_KEY)
 
-                            original_name = f"Order_{order_number}" if order_number else "Digital_PDF"
+                                original_name = f"Order_{order_number}" if order_number else "Digital_PDF"
 
-                            buffer, new_file_name, warnings, error = process_unified_data(items_list,
-                                                                                          f"{original_name}.xlsx")
+                                buffer, new_file_name, warnings, error = process_unified_data(items_list,
+                                                                                              f"{original_name}.xlsx")
 
-                            if error:
-                                st.error(error)
-                            elif buffer:
-                                if warnings:
-                                    with st.expander(f"הערות בקובץ - נמצאו {len(warnings)} הערות (לחצו לצפייה)",
-                                                     expanded=True):
-                                        for warning in warnings:
-                                            if "✅" in warning:
-                                                st.success(warning)
-                                            elif "❌" in warning:
-                                                st.error(warning)
-                                            else:
-                                                st.warning(warning)
-                                st.success("✨ המסמך פוענח בהצלחה!")
-                                st.download_button(label="⬇️ הורד קובץ מוכן לפורטל", data=buffer.getvalue(),
-                                                   file_name=new_file_name,
-                                                   mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
-                        except ValueError as ve:
-                            if str(ve) == "SCANNED_PDF_BLOCKED":
-                                st.error("🛑 **שגיאה: זוהה מסמך סרוק או תמונה.**")
-                                st.warning("אנא העלה PDF דיגיטלי מקורי.")
-                            else:
-                                st.error(f"❌ שגיאה: {ve}")
-                        except Exception as e:
-                            st.error(f"❌ תקלה בלתי צפויה: {e}")
+                                if error:
+                                    st.error(error)
+                                elif buffer:
+                                    if warnings:
+                                        with st.expander(f"הערות בקובץ - נמצאו {len(warnings)} הערות (לחצו לצפייה)",
+                                                         expanded=True):
+                                            for warning in warnings:
+                                                if "✅" in warning:
+                                                    st.success(warning)
+                                                elif "❌" in warning:
+                                                    st.error(warning)
+                                                else:
+                                                    st.warning(warning)
+                                    st.success("✨ המסמך פוענח בהצלחה!")
+                                    st.download_button(label="⬇️ הורד קובץ מוכן לפורטל", data=buffer.getvalue(),
+                                                       file_name=new_file_name,
+                                                       mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+                            except ValueError as ve:
+                                if str(ve) == "SCANNED_PDF_BLOCKED":
+                                    st.error("🛑 **שגיאה: זוהה מסמך סרוק או תמונה.**")
+                                    st.warning(
+                                        "מערכת אטקה מקבלת קבצי Excel, CSV או PDF **דיגיטליים מקוריים בלבד** למניעת טעויות באספקה.")
+                                else:
+                                    st.error(f"❌ שגיאה: {ve}")
+                            except Exception as e:
+                                st.error(f"❌ תקלה בלתי צפויה: {e}")
 
 # תחתית הדף
 st.write("")

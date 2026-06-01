@@ -4,4 +4,3 @@ openpyxl
 openai
 pydantic
 PyMuPDF
-pdfplumber
