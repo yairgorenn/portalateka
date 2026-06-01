@@ -50,7 +50,7 @@ def process_unified_data(items_list, original_file_name):
         row_num = item.get('row_num', '?')
         orig_sku = item.get('sku', '')
         orig_qty = item.get('qty', '')
-        is_error = False
+        is_error = item.get('is_error', False)
 
         # --- א) לוגיקת מק"ט והצלבת קטלוג ---
         if pd.isna(orig_sku) or str(orig_sku).strip() == "" or str(orig_sku).strip().lower() == 'nan':

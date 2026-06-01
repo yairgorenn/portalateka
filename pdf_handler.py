@@ -42,13 +42,12 @@ def process_pdf(pdf_file, openai_api_key):
         {
             "role": "system",
             "content": """אתה חולץ נתונים מתוך טבלאות של הזמנות רכש (B2B). 
-                    חוקי ברזל למניעת טעויות:
-                    1. עוגן שורות: קרא את המסמך שורה אחר שורה לפי "המספר הסידורי" של הלקוח. אל תערבב נתונים בין שורות בשום אופן!
-                    2. איסוף מק"טים: לכל שורה, חלץ את *כל* המק"טים שאתה מזהה והחזר אותם כרשימה. 
-                       - דוגמאות ל'מק"ט אטקה': מספר בן 7 עד 9 ספרות (למשל 002321371, 1215818, 002485037).
-                       - דוגמאות ל'מק"ט יצרן': שילוב של אותיות באנגלית ומספרים (למשל 1SDA066652R1, 2CDS273001R0204, XT1C, E1.2).
-                       - התעלם ממק"טים פנימיים של הלקוח (תבניות עם מקפים כמו 08-8610-00217).
-                    3. בחירת כמות: חלץ את הכמות מאותה שורה בלבד כמספר שלם (Integer). התעלם לחלוטין ממספרים המייצגים מחיר או אחוזים (כמו 74.00, 118.78, 49.50%)."""
+                    חוקי ברזל:
+                    1. עוגן שורות: קרא את המסמך שורה אחר שורה לפי "המספר הסידורי". אל תערבב נתונים!
+                    2. איסוף כל המק"טים: לכל שורה, חלץ את כל סוגי המק"טים (עד 3 מק"טים שונים) והחזר אותם כרשימה.
+                       - חובה לחפש: מק"ט אטקה (7-9 ספרות), ומק"ט יצרן/ספק (כגון 1SDA072614R1).
+                       - חובה לאסוף גם מק"ט פנימי של הלקוח או מק"ט חלקי. אל תסנן שום מק"ט בעצמך, אסוף הכל!
+                    3. כמות: חלץ את הכמות מאותה שורה בלבד כמספר שלם. התעלם ממחירים ואחוזים."""
         },
         {
             "role": "user",
@@ -68,28 +67,40 @@ def process_pdf(pdf_file, openai_api_key):
 
     for item in parsed_data.items:
         chosen_sku = ""
-        valid_skus = [c for c in item.skus_found if c.count(' ') <= 1]
+        is_exact_match = False
 
+        # ניקוי מקדים: מסיר כוכביות, גרשיים או פסיקים (נפוץ במסמכי לב חשמל)
+        cleaned_candidates = [c.replace("*", "").replace("'", "").replace('"', "").strip() for c in item.skus_found]
+        valid_skus = [c for c in cleaned_candidates if c and c.count(' ') <= 1]
+
+        # שלב 1: חיפוש מק"ט אטקה מתוך הרשימה
         for candidate in valid_skus:
-            clean_val = candidate.strip()
-            if not clean_val: continue
-            clean_to_check = clean_val.replace(" ", "").replace("-", "")
+            clean_to_check = candidate.replace(" ", "").replace("-", "")
             if clean_to_check in ateka_set or clean_to_check.lstrip('0') in ateka_set:
-                chosen_sku = clean_val
+                chosen_sku = candidate
+                is_exact_match = True
                 break
 
+        # שלב 2: חיפוש מק"ט יצרן מתוך הרשימה (אם לא נמצא אטקה)
         if not chosen_sku:
             for candidate in valid_skus:
-                clean_val = candidate.strip()
-                if not clean_val: continue
-                clean_to_check = clean_val.upper().replace(" ", "").replace("-", "")
+                clean_to_check = candidate.upper().replace(" ", "").replace("-", "")
                 if clean_to_check in vendor_to_ateka or clean_to_check.lstrip('0') in vendor_to_ateka:
-                    chosen_sku = clean_val
+                    chosen_sku = candidate
+                    is_exact_match = True
                     break
 
-        if not chosen_sku and len(valid_skus) > 0:
-            chosen_sku = valid_skus[0]
+                # שלב 3: אם לא הייתה התאמה מלאה - נשאיר את מה שה-AI מצא, אבל השורה תצבע בכתום באקסל
+                if not is_exact_match:
+                    # נבחר את המק"ט הארוך ביותר שזוהה כדי שהמשתמש יראה מה היה שם
+                    chosen_sku = max(cleaned_candidates, key=len) if cleaned_candidates else ""
+                    # כאן לא נסמן is_exact_match = True, מה שיגרום לאקסל לצבוע בכתום!
 
-        items_list.append({'row_num': item.row_number, 'sku': chosen_sku, 'qty': item.qty})
+        # כתיבה לרשימה הסופית
+        items_list.append({
+            'row_num': item.row_number,
+            'sku': chosen_sku,
+            'qty': item.qty
+        })
 
     return items_list, parsed_data.order_number
