@@ -44,16 +44,19 @@ def process_unified_data(items_list, original_file_name):
     cleaned_skus = []
     cleaned_qtys = []
     warnings = []
+    row_has_error = []
 
     for item in items_list:
         row_num = item.get('row_num', '?')
         orig_sku = item.get('sku', '')
         orig_qty = item.get('qty', '')
+        is_error = False
 
         # --- א) לוגיקת מק"ט והצלבת קטלוג ---
         if pd.isna(orig_sku) or str(orig_sku).strip() == "" or str(orig_sku).strip().lower() == 'nan':
             sku_val = ""
             warnings.append(f"⚠️ שורה {row_num}: שים לב - מקט לא מלא (חסר ערך).")
+            is_error = True
         else:
             sku_str = str(orig_sku).strip()
             if sku_str.endswith('.0'):
@@ -69,6 +72,7 @@ def process_unified_data(items_list, original_file_name):
                 if matched_ateka.lstrip('0') == '888888':
                     sku_val = sku_str
                     warnings.append(f"❌ שורה {row_num}: הפריט לא קיים במערכת אטקה (מקט 888888). הושאר מק\"ט מקורי.")
+                    is_error = True
                 else:
                     sku_val = matched_ateka.zfill(SKU_LENGTH)
 
@@ -78,6 +82,7 @@ def process_unified_data(items_list, original_file_name):
                 if matched_ateka.lstrip('0') == '888888':
                     sku_val = sku_str
                     warnings.append(f"❌ שורה {row_num}: הפריט לא קיים במערכת אטקה (מקט 888888). הושאר מק\"ט יצרן.")
+                    is_error = True
                 else:
                     sku_val = matched_ateka.zfill(SKU_LENGTH)
                     warnings.append(f"✅ שורה {row_num}: תקין - הומר ממק\"ט יצרן למק\"ט אטקה ({sku_val}).")
@@ -87,6 +92,7 @@ def process_unified_data(items_list, original_file_name):
             else:
                     sku_val = sku_str
                     warnings.append(f"❌ שורה {row_num}: מק\"ט לא מוכר במערכת – אנא בדוק ({sku_str}).")
+                    is_error = True
 
         # --- ב) בדיקת כמות ---
         qty_is_valid = False
@@ -103,44 +109,58 @@ def process_unified_data(items_list, original_file_name):
 
         if not qty_is_valid:
             warnings.append(f"⚠️ שורה {row_num}: שים לב חסרה כמות תקינה.")
+            is_error = True
             if pd.isna(orig_qty) or str(orig_qty).strip() == "":
                 qty_val = ""
 
         cleaned_skus.append(sku_val)
         cleaned_qtys.append(qty_val)
+        row_has_error.append(is_error)
 
-    # --- ג) יצירת האקסל ---
-    df_clean = pd.DataFrame({'מק"ט': cleaned_skus, 'כמות': cleaned_qtys})
-    buffer = io.BytesIO()
-    with pd.ExcelWriter(buffer, engine='openpyxl') as writer:
-        df_clean.to_excel(writer, index=False)
-        workbook = writer.book
-        worksheet = workbook.active
-        worksheet.views.sheetView[0].showGridLines = True
-        worksheet.sheet_properties.pageSetUpPr.fitToPage = True
-        worksheet.sheet_view.rightToLeft = True
+        # --- ג) יצירת האקסל ---
+        df_clean = pd.DataFrame({'מק"ט': cleaned_skus, 'כמות': cleaned_qtys})
+        buffer = io.BytesIO()
+        with pd.ExcelWriter(buffer, engine='openpyxl') as writer:
+            df_clean.to_excel(writer, index=False)
+            workbook = writer.book
+            worksheet = workbook.active
+            worksheet.views.sheetView[0].showGridLines = True
+            worksheet.sheet_properties.pageSetUpPr.fitToPage = True
+            worksheet.sheet_view.rightToLeft = True
 
-        font_tahoma_regular = Font(name='Tahoma', size=14)
-        font_tahoma_header = Font(name='Tahoma', size=14, bold=True, color='FFFFFF')
-        fill_header = PatternFill(start_color='1F497D', end_color='1F497D', fill_type='solid')
-        center_align = Alignment(horizontal='center', vertical='center')
+            font_tahoma_regular = Font(name='Tahoma', size=14)
+            font_tahoma_header = Font(name='Tahoma', size=14, bold=True, color='FFFFFF')
 
-        for row in worksheet.iter_rows():
-            for cell in row:
-                cell.alignment = center_align
-                if cell.row == 1:
-                    cell.font = font_tahoma_header
-                    cell.fill = fill_header
-                else:
-                    cell.font = font_tahoma_regular
+            # הגדרת הצבעים
+            fill_header = PatternFill(start_color='1F497D', end_color='1F497D', fill_type='solid')
+            fill_warning = PatternFill(start_color='FFD580', end_color='FFD580',
+                                       fill_type='solid')  # <--- צבע כתום בהיר לשגיאות
 
-        worksheet.column_dimensions['A'].width = 20
-        worksheet.column_dimensions['B'].width = 15
+            center_align = Alignment(horizontal='center', vertical='center')
 
-    original_name, _ = os.path.splitext(original_file_name)
-    new_file_name = f"{original_name}_מוכן_לפורטל.xlsx"
+            for row in worksheet.iter_rows():
+                for cell in row:
+                    cell.alignment = center_align
 
-    return buffer, new_file_name, warnings, None
+                    if cell.row == 1:
+                        # שורת הכותרת (שורה 1)
+                        cell.font = font_tahoma_header
+                        cell.fill = fill_header
+                    else:
+                        # שורות הנתונים
+                        cell.font = font_tahoma_regular
+
+                        # בדיקה האם השורה הזו סומנה עם תקלה (עושים פחות 2 כי שורה 1 זה כותרת והאינדקס מתחיל מ-0)
+                        if row_has_error[cell.row - 2]:
+                            cell.fill = fill_warning  # צביעה בכתום
+
+            worksheet.column_dimensions['A'].width = 20
+            worksheet.column_dimensions['B'].width = 15
+
+        original_name, _ = os.path.splitext(original_file_name)
+        new_file_name = f"{original_name}_מוכן_לפורטל.xlsx"
+
+        return buffer, new_file_name, warnings, None
 
 
 def process_excel(uploaded_file, original_file_name):

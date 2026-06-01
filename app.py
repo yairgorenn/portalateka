@@ -110,4 +110,4 @@ col1, col2 = st.columns([3, 1])
 with col1:
     if os.path.exists("ATEKA_Logo_He.png"): st.image("ATEKA_Logo_He.png", width=160)
 with col2:
-    if os.path.exists("yg_logo.png"): st.image("yg_logo.png", width=80)
+    if os.path.exists("yg_logo.png"): st.image("yg_logo.png", width=100)

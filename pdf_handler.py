@@ -4,6 +4,7 @@ from pydantic import BaseModel, Field
 from excel_handler import load_catalog
 
 
+
 class OrderRow(BaseModel):
     row_number: int = Field(description="מספר השורה")
     product_description: str = Field(description="תיאור המוצר המלא.")
@@ -25,7 +26,8 @@ def process_pdf(pdf_file, openai_api_key):
     pdf_document = fitz.open(stream=file_bytes, filetype="pdf")
 
     extracted_text = ""
-    for page_num in range(min(len(pdf_document), 3)):
+    # קורא את כל עמודי המסמך מהתחלה ועד הסוף (ללא הגבלת 3 עמודים)
+    for page_num in range(len(pdf_document)):
         page = pdf_document.load_page(page_num)
         extracted_text += page.get_text("text") + "\n"
 
