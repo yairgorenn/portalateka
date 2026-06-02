@@ -63,13 +63,21 @@ if uploaded_file is not None:
                 if not OPENAI_API_KEY:
                     st.error("❌ תקלת שרת: מפתח API לא מוגדר ב-Railway. אנא פנה למנהל המערכת.")
                 else:
-                    if st.button("🚀 התחל פענוח AI"):
-                        with st.spinner('המנוע קורא את המסמך ומעגן שורות, זה עשוי לקחת מספר שניות...'):
-                            try:
-                                # ייבוא ישיר של מנוע ה-AI המשופר בלבד
-                                from pdf_handler import process_pdf
+                    # מתג בחירת מנוע פענוח
+                    engine_choice = st.radio("בחר מנוע פענוח PDF:",
+                                             ["מנוע 100% ודאות (השוואה ישירה לקטלוג)", "מנוע AI (נסיוני)"])
 
-                                items_list, order_number = process_pdf(uploaded_file, OPENAI_API_KEY)
+                    if st.button("🚀 התחל פענוח"):
+                        with st.spinner('המערכת מעבדת את המסמך...'):
+                            try:
+                                if "100%" in engine_choice:
+                                    from pdf_deterministic_parser import process_pdf_deterministic
+
+                                    items_list, order_number = process_pdf_deterministic(uploaded_file)
+                                else:
+                                    from pdf_handler import process_pdf
+
+                                    items_list, order_number = process_pdf(uploaded_file, OPENAI_API_KEY)
 
                                 original_name = f"Order_{order_number}" if order_number else "Digital_PDF"
 
