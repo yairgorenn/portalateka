@@ -9,95 +9,74 @@ def process_pdf_deterministic(pdf_file):
     row_counter = 1
 
     with pdfplumber.open(pdf_file) as pdf:
-        for page_num, page in enumerate(pdf.pages):
-            words = page.extract_words(x_tolerance=3, y_tolerance=3)
-            if not words:
+        for page in pdf.pages:
+            # חזרנו לחילוץ שורות פשוט ששומר על רווחים
+            text = page.extract_text(layout=True)
+            if not text:
                 continue
 
-            # --- שלב א': קיבוץ המילים לשורות לפי גובה פיזי (ציר Y) ---
-            lines = []
-            words.sort(key=lambda w: (w['top'], w['x0']))
-
-            current_line = []
-            current_top = words[0]['top']
-
-            for w in words:
-                if abs(w['top'] - current_top) <= 5:
-                    current_line.append(w)
-                else:
-                    lines.append(current_line)
-                    current_line = [w]
-                    current_top = w['top']
-            if current_line:
-                lines.append(current_line)
-
-            # --- שלב ב': כיול העמודה (חיתוך ציר ה-X של "כמות") ---
-            qty_x0 = -1
-            qty_x1 = -1
-
-            print(f"\n--- 📄 מתחיל סריקת עמוד {page_num + 1} ---")
+            lines = text.split('\n')
 
             for line in lines:
-                for w in line:
-                    if "כמות" in w['text']:
-                        # הרחבנו משמעותית את החלון ל-80 פיקסלים כדי לכסות טבלאות מפוזרות
-                        qty_x0 = w['x0'] - 80
-                        qty_x1 = w['x1'] + 80
-                        print(f"🔍 [DEBUG] נמצאה כותרת 'כמות'! טווח חיתוך X נקבע ל: {qty_x0:.1f} עד {qty_x1:.1f}")
-                        break
-                if qty_x0 != -1:
-                    break
+                if not line.strip():
+                    continue
 
-            if qty_x0 == -1:
-                print("⚠️ [DEBUG] אזהרה: לא נמצאה המילה 'כמות' בכותרות של עמוד זה!")
+                # נטרול רעשים בסיסי
+                safe_line = re.sub(r'\b\d{1,2}[/.-]\d{1,2}[/.-]\d{2,4}\b', ' ', line)
 
-            # --- שלב ג': סריקת השורות וחילוץ מתמטי ---
-            for line in lines:
+                words = safe_line.split()
                 chosen_sku = None
                 is_exact_match = False
 
-                # 1. חיפוש עוגן (מק"ט חוקי)
-                for w in line:
-                    word_text = w['text']
-                    clean_word = word_text.replace("-", "").replace(" ", "").replace("*", "").replace("'", "").replace(
-                        '"', "").upper()
+                # 1. חיפוש מק"ט (העוגן של השורה)
+                for word in words:
+                    clean_word = word.replace("-", "").replace(" ", "").replace("*", "").replace("'", "").replace('"',
+                                                                                                                  "").upper()
 
                     if clean_word in ateka_set or clean_word.lstrip('0') in ateka_set:
-                        chosen_sku = word_text.replace("*", "").replace("'", "").replace('"', "")
+                        chosen_sku = word.replace("*", "").replace("'", "").replace('"', "")
                         is_exact_match = True
                         break
 
                     if clean_word in vendor_to_ateka or clean_word.lstrip('0') in vendor_to_ateka:
-                        chosen_sku = word_text.replace("*", "").replace("'", "").replace('"', "")
+                        chosen_sku = word.replace("*", "").replace("'", "").replace('"', "")
                         is_exact_match = True
                         break
 
-                # 2. חיתוך עמודת הכמות ושליפת הנתון
+                # 2. חילוץ כמות חכם עם תמיכה בעברית הפוכה ("חי" במקום "יח")
                 if is_exact_match and chosen_sku:
                     qty = ""
-                    print(f"\n💡 [DEBUG] נמצא מק\"ט בשורה: {chosen_sku}")
 
-                    # הדפסת כל המילים בשורה כדי שנראה את המטריצה בעיניים
-                    line_texts = [(w['text'], round(w['x0'], 1)) for w in line]
-                    print(f"   [DEBUG] כל המילים בשורה והמיקום שלהן (מילה, ציר X): {line_texts}")
+                    # ניקוי השורה ממחירי ש"ח לפני חיפוש הכמות
+                    clean_for_qty = re.sub(r'\d+(?:,\d+)?\.\d+\s*(?:ש"ח|₪|שקל|שח|חש)', '', safe_line)
+                    clean_for_qty = re.sub(r'(?:ש"ח|₪|שקל|שח|חש)\s*\d+(?:,\d+)?\.\d+', '', clean_for_qty)
+                    clean_for_qty = re.sub(r'\d+(?:,\d+)?\.\d+\s*%', '', clean_for_qty)
 
-                    if qty_x0 != -1:
-                        words_in_qty_column = [w for w in line if w['x0'] >= qty_x0 and w['x1'] <= qty_x1]
-                        print(f"   [DEBUG] המילים שנפלו בתוך חלון הכמות: {[w['text'] for w in words_in_qty_column]}")
+                    # חיפוש מספר שצמוד לאחת ממילות היחידה (כולל הפוכות!)
+                    # המילים: יח, יחידה, יחידות, חי (יח הפוך), הדיחי (יחידה הפוך)
+                    unit_words = r'(?:יח|יחידה|יחידות|חי|הדיחי|pcs|ea)'
 
-                        for cw in words_in_qty_column:
-                            c_text = cw['text']
-                            # מנקים תווים נלווים
-                            c_text_clean = re.sub(r'(?:יח|יחידה|יחידות|ש"ח|₪|שקל|שח|%)', '', c_text).strip()
+                    # בודק קודם "מילה מספר" (למשל "יח 1.00" או "חי 1.00")
+                    sem_matches = re.findall(rf'{unit_words}\s*(\d+)(?:\.\d+)?', clean_for_qty.lower())
+                    if not sem_matches:
+                        # בודק "מספר מילה" (למשל "1.00 יח" או "1.00 חי")
+                        sem_matches = re.findall(rf'(\d+)(?:\.\d+)?\s*{unit_words}', clean_for_qty.lower())
 
-                            qty_match = re.search(r'\b(\d+)(?:\.\d+)?\b', c_text_clean)
-                            if qty_match and qty_match.group(1) != '0':
-                                qty = qty_match.group(1)
-                                print(f"   ✅ [DEBUG] כמות שחולצה בהצלחה: {qty}")
-                                break
+                    if sem_matches:
+                        valid_sem = [q for q in sem_matches if q != '0' and len(q) < 5]
+                        if valid_sem:
+                            qty = valid_sem[0]
 
+                    # אם לא הייתה מילת יחידה בכלל בשורה (כמו בהזמנות אחרות), קח את המספר הבודד האחרון
                     if not qty:
-                        print("   ❌ [DEBUG] שגיאה - לא חולצה כמות! (אולי המספר מחוץ לחלון ה-X?)")
+                        qty_matches = re.findall(r'\b(\d+)(?:\.\d+)?\b', clean_for_qty)
+                        valid_qtys = []
+                        for q in qty_matches:
+                            # מסננים את המק"ט עצמו ומספרים לא הגיוניים
+                            if q not in chosen_sku and q != '0' and len(q) < 5:
+                                valid_qtys.append(q)
+                        if valid_qtys:
+                            qty = valid_qtys[-1]
 
                     items_list.append({
                         'row_num': row_counter,
@@ -107,4 +86,4 @@ def process_pdf_deterministic(pdf_file):
                     })
                     row_counter += 1
 
-    return items_list, "Deterministic_Geometric_Engine"
+    return items_list, "Deterministic_Engine"
