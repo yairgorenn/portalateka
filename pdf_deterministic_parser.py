@@ -9,86 +9,94 @@ def process_pdf_deterministic(pdf_file):
     row_counter = 1
 
     with pdfplumber.open(pdf_file) as pdf:
-        # עוברים עמוד-עמוד
         for page in pdf.pages:
-            text = page.extract_text(layout=True)
-            if not text:
+            # במקום לחלץ טקסט, אנחנו מחלצים מילים עם קואורדינטות פיזיות (X, Y)
+            words = page.extract_words(x_tolerance=3, y_tolerance=3)
+            if not words:
                 continue
 
-            lines = text.split('\n')
+            # --- שלב א': קיבוץ המילים לשורות לפי גובה פיזי (ציר Y) ---
+            lines = []
+            # מיון המילים מהגבוה לנמוך, ומימין לשמאל
+            words.sort(key=lambda w: (w['top'], w['x0']))
 
-            # --- שלב 0: כיול הכוונת (מציאת עמודת הכמות בעמוד הנוכחי) ---
-            qty_start_idx = -1
-            qty_end_idx = -1
+            current_line = []
+            current_top = words[0]['top']
+
+            for w in words:
+                # אם המילה באותו גובה (סובלנות של 5 פיקסלים להדפסה עקומה)
+                if abs(w['top'] - current_top) <= 5:
+                    current_line.append(w)
+                else:
+                    lines.append(current_line)
+                    current_line = [w]
+                    current_top = w['top']
+            if current_line:
+                lines.append(current_line)
+
+            # --- שלב ב': כיול העמודה (חיתוך ציר ה-X של "כמות") ---
+            qty_x0 = -1  # גבול שמאלי
+            qty_x1 = -1  # גבול ימני
 
             for line in lines:
-                if "כמות" in line:
-                    # מציאת האינדקס (מיקום התו) של המילה "כמות" בשורת הכותרת
-                    match = re.search(r'כמות', line)
-                    if match:
-                        center = match.start()
-                        # פתיחת "חלון" אנכי של 15 תווים ימינה ושמאלה.
-                        # זה מספיק רחב כדי לתפוס את המספר, אבל צר מספיק כדי לחתוך עמודות אחרות
-                        qty_start_idx = max(0, center - 15)
-                        qty_end_idx = center + 15
-                        break  # ברגע שמצאנו כותרת בעמוד, עוצרים את החיפוש
+                for w in line:
+                    if "כמות" in w['text']:
+                        # חותכים רצועה ברוחב של כ-100 פיקסלים סביב המילה "כמות"
+                        qty_x0 = w['x0'] - 50
+                        qty_x1 = w['x1'] + 50
+                        break
+                if qty_x0 != -1:
+                    break
 
-            # --- שלב 1: סריקת השורות ---
+            # --- שלב ג': סריקת השורות וחילוץ מתמטי ---
             for line in lines:
-                if not line.strip():
-                    continue
-
-                # נטרול רעשים בסיסי (מוחק תאריכים מכל השורה כדי לא להפריע למק"טים)
-                safe_line = re.sub(r'\b\d{1,2}[/.-]\d{1,2}[/.-]\d{2,4}\b', ' ', line)
-
-                words = safe_line.split()
                 chosen_sku = None
                 is_exact_match = False
 
-                # --- 2. חיפוש עוגן (מק"ט חוקי) ---
-                for word in words:
-                    clean_word = word.replace("-", "").replace(" ", "").replace("*", "").replace("'", "").replace('"',
-                                                                                                                  "").upper()
+                # 1. חיפוש מק"ט (העוגן של השורה)
+                for w in line:
+                    word_text = w['text']
+                    clean_word = word_text.replace("-", "").replace(" ", "").replace("*", "").replace("'", "").replace(
+                        '"', "").upper()
 
+                    # בדיקת מק"ט אטקה
                     if clean_word in ateka_set or clean_word.lstrip('0') in ateka_set:
-                        chosen_sku = word.replace("*", "").replace("'", "").replace('"', "")
+                        chosen_sku = word_text.replace("*", "").replace("'", "").replace('"', "")
                         is_exact_match = True
                         break
 
+                    # בדיקת מק"ט יצרן
                     if clean_word in vendor_to_ateka or clean_word.lstrip('0') in vendor_to_ateka:
-                        chosen_sku = word.replace("*", "").replace("'", "").replace('"', "")
+                        chosen_sku = word_text.replace("*", "").replace("'", "").replace('"', "")
                         is_exact_match = True
                         break
 
-                # --- 3. חילוץ כמות (מתוך ה"מנהרה" בלבד!) ---
+                # 2. חיתוך עמודת הכמות ושליפת הנתון
                 if is_exact_match and chosen_sku:
                     qty = ""
 
-                    # אם מצאנו את עמודת הכמות והשורה הזו ארוכה מספיק
-                    if qty_start_idx != -1 and len(safe_line) > qty_start_idx:
-                        # חותכים את השורה רק בטווח התווים של עמודת הכמות!
-                        column_chunk = safe_line[qty_start_idx:min(len(safe_line), qty_end_idx)]
+                    # מוודאים שמצאנו איפה העמודה נמצאת בעמוד הזה
+                    if qty_x0 != -1:
+                        # הקסם: לוקחים רק את המילים שהקואורדינטה שלהן נופלת בדיוק בתוך עמודת הכמות!
+                        words_in_qty_column = [w for w in line if w['x0'] >= qty_x0 and w['x1'] <= qty_x1]
 
-                        # ניקוי רעשי מחיר שנכנסו בטעות לגזרה
-                        column_chunk = re.sub(r'\d+(?:,\d+)?\.\d+\s*(?:ש"ח|₪|שקל|שח)', '', column_chunk)
-                        column_chunk = re.sub(r'(?:ש"ח|₪|שקל|שח)\s*\d+(?:,\d+)?\.\d+', '', column_chunk)
-                        column_chunk = re.sub(r'\d+(?:,\d+)?\.\d+\s*%', '', column_chunk)
+                        for cw in words_in_qty_column:
+                            c_text = cw['text']
+                            # מסננים אם נכנס בטעות "יח" או סימן מחיר, ומשאירים רק את המספר
+                            c_text = re.sub(r'(?:יח|יחידה|יחידות|ש"ח|₪|שקל|שח|%)', '', c_text).strip()
 
-                        # שליפת המספר היחיד שנמצא בתוך החלון הזה
-                        qty_matches = re.findall(r'\b(\d+)(?:\.00)?\b', column_chunk)
-                        valid_qtys = [q for q in qty_matches if q != '0' and len(q) < 5]
-
-                        if valid_qtys:
-                            # לוקחים את המספר הראשון שמצאנו בחלון הכמות
-                            qty = valid_qtys[0]
+                            # שליפת המספר המושלם (למשל 1, או 1.00)
+                            qty_match = re.search(r'\b(\d+)(?:\.\d+)?\b', c_text)
+                            if qty_match and qty_match.group(1) != '0':
+                                qty = qty_match.group(1)
+                                break  # מצאנו את הכמות בגזרה, אפשר לעצור
 
                     items_list.append({
                         'row_num': row_counter,
                         'sku': chosen_sku,
                         'qty': qty,
-                        # אם לא הייתה כמות בחלון הזה, השורה תחזור ריקה ותיצבע בכתום
                         'is_error': qty == ""
                     })
                     row_counter += 1
 
-    return items_list, "Deterministic_Engine"
+    return items_list, "Deterministic_Geometric_Engine"
