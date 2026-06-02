@@ -1,8 +1,8 @@
-import fitz
+import pdfplumber
+import io
 from openai import OpenAI
 from pydantic import BaseModel, Field
 from excel_handler import load_catalog
-
 
 
 class OrderRow(BaseModel):
@@ -10,7 +10,8 @@ class OrderRow(BaseModel):
     product_description: str = Field(description="תיאור המוצר המלא.")
     skus_found: list[str] = Field(description="רשימת המק\"טים. חובה להעתיק במדויק!")
     qty: str = Field(
-        description="הכמות המוזמנת. חוק ברזל: עליך להחזיר רק את המספר המדויק כמספר שלם! התעלם ממילים כמו 'יח' או אחוזים, והתעלם מאפסים אחרי הנקודה (למשל '8.00' נרשם כ-'8').")
+        description="הכמות המוזמנת. חוק ברזל: החזר רק את הכמות המדויקת כמספר שלם! אם הכמות חסרה, לא ברורה לחלוטין, או שיש חשש להסטה משורה אחרת - החזר מחרוזת ריקה \"\" ואל תנחש בשום אופן!"
+    )
 
 
 class PurchaseOrder(BaseModel):
@@ -23,31 +24,26 @@ def process_pdf(pdf_file, openai_api_key):
     if not file_bytes:
         raise Exception("הקובץ שהועלה ריק.")
 
-    pdf_document = fitz.open(stream=file_bytes, filetype="pdf")
-
+    # מנוע קריאה מרחבי: שומר על העמודות והרווחים המדויקים של המסמך!
+    pdf_bytes_io = io.BytesIO(file_bytes)
     extracted_text = ""
-    # קורא את כל עמודי המסמך מהתחלה ועד הסוף (ללא הגבלת 3 עמודים)
-    for page_num in range(len(pdf_document)):
-        page = pdf_document.load_page(page_num)
-        extracted_text += page.get_text("text") + "\n"
+    with pdfplumber.open(pdf_bytes_io) as pdf:
+        for page in pdf.pages:
+            text = page.extract_text(layout=True)
+            if text:
+                extracted_text += text + "\n"
 
-    # אם הקובץ ריק מטקסט, אנחנו חוסמים מיד!
-    is_scanned = len(extracted_text.strip()) < 50
-    if is_scanned:
-        raise ValueError("SCANNED_PDF_BLOCKED")
-
-    # טיפול דיגיטלי טהור
     client = OpenAI(api_key=openai_api_key)
     messages = [
         {
             "role": "system",
             "content": """אתה חולץ נתונים מתוך טבלאות של הזמנות רכש (B2B). 
-                    חוקי ברזל:
-                    1. עוגן שורות: קרא את המסמך שורה אחר שורה לפי "המספר הסידורי". אל תערבב נתונים!
-                    2. איסוף כל המק"טים: לכל שורה, חלץ את כל סוגי המק"טים (עד 3 מק"טים שונים) והחזר אותם כרשימה.
-                       - חובה לחפש: מק"ט אטקה (7-9 ספרות), ומק"ט יצרן/ספק (כגון 1SDA072614R1).
-                       - חובה לאסוף גם מק"ט פנימי של הלקוח או מק"ט חלקי. אל תסנן שום מק"ט בעצמך, אסוף הכל!
-                    3. כמות: חלץ את הכמות מאותה שורה בלבד כמספר שלם. התעלם ממחירים ואחוזים."""
+            הטקסט שמועבר אליך מסודר ויזואלית עם רווחים כדי לשמור על מבנה העמודות המדויק.
+
+            חוקי ברזל:
+            1. עוגן שורות: קרא את המסמך שורה מול שורה בדיוק על אותו קו אופקי. אל תגלוש לשורה מתחת!
+            2. איסוף כל המק"טים: חלץ את כל המק"טים באותה שורה בלבד (אטקה, יצרן, פנימי, חלקי).
+            3. כמות: חלץ את הכמות מאותה שורה אופקית בלבד. אם אתה לא בטוח ב-100% מה הכמות של השורה הזו, החזר ריק ("")!"""
         },
         {
             "role": "user",
@@ -69,11 +65,11 @@ def process_pdf(pdf_file, openai_api_key):
         chosen_sku = ""
         is_exact_match = False
 
-        # ניקוי מקדים: מסיר כוכביות, גרשיים או פסיקים (נפוץ במסמכי לב חשמל)
+        # ניקוי המק"טים שה-AI הביא
         cleaned_candidates = [c.replace("*", "").replace("'", "").replace('"', "").strip() for c in item.skus_found]
         valid_skus = [c for c in cleaned_candidates if c and c.count(' ') <= 1]
 
-        # שלב 1: חיפוש מק"ט אטקה מתוך הרשימה
+        # שלב 1: חיפוש התאמה מלאה (אטקה)
         for candidate in valid_skus:
             clean_to_check = candidate.replace(" ", "").replace("-", "")
             if clean_to_check in ateka_set or clean_to_check.lstrip('0') in ateka_set:
@@ -81,26 +77,25 @@ def process_pdf(pdf_file, openai_api_key):
                 is_exact_match = True
                 break
 
-        # שלב 2: חיפוש מק"ט יצרן מתוך הרשימה (אם לא נמצא אטקה)
-        if not chosen_sku:
+        # שלב 2: חיפוש התאמה מלאה (יצרן)
+        if not is_exact_match:
             for candidate in valid_skus:
                 clean_to_check = candidate.upper().replace(" ", "").replace("-", "")
                 if clean_to_check in vendor_to_ateka or clean_to_check.lstrip('0') in vendor_to_ateka:
-                    chosen_sku = candidate
+                    chosen_sku = vendor_to_ateka.get(clean_to_check) or vendor_to_ateka.get(clean_to_check.lstrip('0'))
                     is_exact_match = True
                     break
 
-                # שלב 3: אם לא הייתה התאמה מלאה - נשאיר את מה שה-AI מצא, אבל השורה תצבע בכתום באקסל
-                if not is_exact_match:
-                    # נבחר את המק"ט הארוך ביותר שזוהה כדי שהמשתמש יראה מה היה שם
-                    chosen_sku = max(cleaned_candidates, key=len) if cleaned_candidates else ""
-                    # כאן לא נסמן is_exact_match = True, מה שיגרום לאקסל לצבוע בכתום!
+        # שלב 3: חוסר התאמה מוחלט - העברת אחריות למשתמש
+        if not is_exact_match:
+            chosen_sku = max(valid_skus, key=len) if valid_skus else ""
 
-        # כתיבה לרשימה הסופית
+        # אם ה-AI החזיר כמות ריקה, ה-is_error יהפוך ל-True אוטומטית בהמשך התהליך ויצבע בכתום
         items_list.append({
             'row_num': item.row_number,
             'sku': chosen_sku,
-            'qty': item.qty
+            'qty': item.qty,
+            'is_error': not is_exact_match
         })
 
     return items_list, parsed_data.order_number
