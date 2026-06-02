@@ -82,7 +82,9 @@ def process_pdf(pdf_file, openai_api_key):
             for candidate in valid_skus:
                 clean_to_check = candidate.upper().replace(" ", "").replace("-", "")
                 if clean_to_check in vendor_to_ateka or clean_to_check.lstrip('0') in vendor_to_ateka:
-                    chosen_sku = vendor_to_ateka.get(clean_to_check) or vendor_to_ateka.get(clean_to_check.lstrip('0'))
+                    # כרגע שולחים מקט יצרן בלבד לאקסל
+                    #chosen_sku = vendor_to_ateka.get(clean_to_check) or vendor_to_ateka.get(clean_to_check.lstrip('0'))
+                    chosen_sku = candidate
                     is_exact_match = True
                     break
 
