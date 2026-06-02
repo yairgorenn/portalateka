@@ -21,18 +21,18 @@ def process_pdf_deterministic(pdf_file):
                 if not line.strip():
                     continue
 
-                    # --- 1. נטרול רעשים (מחיקת מחירים, אחוזים ותאריכים כדי שלא יתבלבלו עם כמות) ---
-                    safe_line = line
+                # --- 1. נטרול רעשים (מחיקת מחירים, אחוזים ותאריכים כדי שלא יתבלבלו עם כמות) ---
+                safe_line = line
 
-                    # א. השמדת תאריכים (למשל 02/06/26, 15.08.2024, 02-06-26)
-                    safe_line = re.sub(r'\b\d{1,2}[/.-]\d{1,2}[/.-]\d{2,4}\b', '', safe_line)
+                # א. השמדת תאריכים (למשל 02/06/26, 15.08.2024, 02-06-26)
+                safe_line = re.sub(r'\b\d{1,2}[/.-]\d{1,2}[/.-]\d{2,4}\b', '', safe_line)
 
-                    # ב. השמדת מחירים (כולל תמיכה ב"שח" של אלמור ללא מרכאות)
-                    safe_line = re.sub(r'\d+(?:,\d+)?\.\d+\s*(?:ש"ח|₪|שקל|שח)', '', safe_line)
-                    safe_line = re.sub(r'(?:ש"ח|₪|שקל|שח)\s*\d+(?:,\d+)?\.\d+', '', safe_line)
+                # ב. השמדת מחירים (כולל תמיכה ב"שח" של אלמור ללא מרכאות)
+                safe_line = re.sub(r'\d+(?:,\d+)?\.\d+\s*(?:ש"ח|₪|שקל|שח)', '', safe_line)
+                safe_line = re.sub(r'(?:ש"ח|₪|שקל|שח)\s*\d+(?:,\d+)?\.\d+', '', safe_line)
 
-                    # ג. השמדת אחוזים (הנחות)
-                    safe_line = re.sub(r'\d+(?:,\d+)?\.\d+\s*%', '', safe_line)
+                # ג. השמדת אחוזים (הנחות)
+                safe_line = re.sub(r'\d+(?:,\d+)?\.\d+\s*%', '', safe_line)
 
                 words = safe_line.split()
                 chosen_sku = None
