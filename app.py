@@ -1,121 +1,89 @@
-import streamlit as st
-import os
+import pdfplumber
+import re
+from excel_handler import load_catalog
 
-from excel_handler import process_excel, process_unified_data
-from pdf_handler import process_pdf
 
-# משיכת מפתח ה-API ממשתני הסביבה של השרת (Railway)
-OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
-# סיסמת הגישה שהגדרת לפענוח
-PDF_PASSWORD = "9876"
+def process_pdf_deterministic(pdf_file):
+    ateka_set, vendor_to_ateka = load_catalog("PB.csv")
+    items_list = []
+    row_counter = 1
 
-st.set_page_config(page_title="חברת אטקה - מתקן קבצי הזמנה", page_icon="⚙️", layout="centered")
+    with pdfplumber.open(pdf_file) as pdf:
+        for page in pdf.pages:
+            # חזרנו לחילוץ שורות פשוט ששומר על רווחים
+            text = page.extract_text(layout=True)
+            if not text:
+                continue
 
-st.markdown("""
-    <style>
-    .stApp { direction: RTL; text-align: right; }
-    .stApp h1, .stApp h2, .stApp h3, .stApp p, .stApp label, .stApp span { text-align: right !important; direction: RTL !important; }
-    [data-testid="stFileUploadDropzone"] { direction: RTL; text-align: right !important; }
-    [data-testid="stFileUploadDropzone"] * { text-align: right !important; direction: RTL !important; }
-    div.stButton > button:first-child { background-color: #2e7d32; color: white; width: 100%; font-size: 20px; font-weight: bold; padding: 12px; border-radius: 8px; }
-    </style>
-    """, unsafe_allow_html=True)
+            lines = text.split('\n')
 
-st.title("⚙️ מערכת חכמה לקליטת הזמנות")
-st.write("העלו קובץ Excel, CSV או **PDF**. המערכת תבדוק מק\"טים ותכין קובץ נקי לפורטל אטקה.")
+            for line in lines:
+                if not line.strip():
+                    continue
 
-# המערכת מקבלת רק קבצי מקור - הורדנו תמיכה ב-png/jpg
-uploaded_file = st.file_uploader("בחרו קובץ", type=["xlsx", "csv", "pdf"], label_visibility="collapsed")
+                # נטרול רעשים בסיסי
+                safe_line = re.sub(r'\b\d{1,2}[/.-]\d{1,2}[/.-]\d{2,4}\b', ' ', line)
 
-if uploaded_file is not None:
-    file_ext = uploaded_file.name.lower().split('.')[-1]
+                words = safe_line.split()
+                chosen_sku = None
+                is_exact_match = False
 
-    # --- מסלול 1: אקסל/CSV ---
-    if file_ext in ['xlsx', 'csv']:
-        with st.spinner('מעבד קובץ, אנא המתן...'):
-            buffer, new_file_name, warnings, error = process_excel(uploaded_file, uploaded_file.name)
+                # 1. חיפוש מק"ט (העוגן של השורה)
+                for word in words:
+                    clean_word = word.replace("-", "").replace(" ", "").replace("*", "").replace("'", "").replace('"',
+                                                                                                                  "").upper()
 
-            if error:
-                st.error(error)
-            elif buffer:
-                if warnings:
-                    with st.expander(f"הערות בקובץ - נמצאו {len(warnings)} הערות (לחצו לצפייה)", expanded=True):
-                        for warning in warnings:
-                            if "✅" in warning:
-                                st.success(warning)
-                            elif "❌" in warning:
-                                st.error(warning)
-                            else:
-                                st.warning(warning)
-                st.success("✨ עיבוד הקובץ הסתיים בהצלחה!")
-                st.download_button(label="⬇️ הורד קובץ מוכן לפורטל", data=buffer.getvalue(), file_name=new_file_name,
-                                   mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+                    if clean_word in ateka_set or clean_word.lstrip('0') in ateka_set:
+                        chosen_sku = word.replace("*", "").replace("'", "").replace('"', "")
+                        is_exact_match = True
+                        break
 
-    # --- מסלול 2: PDF ---
-    elif file_ext == 'pdf':
-        st.info("ℹ️ פענוח מסמכי PDF דורש הרשאה מיוחדת.")
-        user_password = st.text_input("הזן סיסמת מורשה:", type="password")
+                    if clean_word in vendor_to_ateka or clean_word.lstrip('0') in vendor_to_ateka:
+                        chosen_sku = word.replace("*", "").replace("'", "").replace('"', "")
+                        is_exact_match = True
+                        break
 
-        if user_password:
-            if user_password != PDF_PASSWORD:
-                st.error("❌ סיסמה שגויה.")
-            else:
-                if not OPENAI_API_KEY:
-                    st.error("❌ תקלת שרת: מפתח API לא מוגדר ב-Railway. אנא פנה למנהל המערכת.")
-                else:
-                    # מתג בחירת מנוע פענוח
-                    engine_choice = st.radio("בחר מנוע פענוח PDF:",
-                                             ["מנוע 100% ודאות (השוואה ישירה לקטלוג)", "מנוע AI (נסיוני)"])
+                # 2. חילוץ כמות חכם עם תמיכה בעברית הפוכה ("חי" במקום "יח")
+                if is_exact_match and chosen_sku:
+                    qty = ""
 
-                    if st.button("🚀 התחל פענוח"):
-                        with st.spinner('המערכת מעבדת את המסמך...'):
-                            try:
-                                if "100%" in engine_choice:
-                                    from pdf_deterministic_parser import process_pdf_deterministic
+                    # ניקוי השורה ממחירי ש"ח לפני חיפוש הכמות
+                    clean_for_qty = re.sub(r'\d+(?:,\d+)?\.\d+\s*(?:ש"ח|₪|שקל|שח|חש)', '', safe_line)
+                    clean_for_qty = re.sub(r'(?:ש"ח|₪|שקל|שח|חש)\s*\d+(?:,\d+)?\.\d+', '', clean_for_qty)
+                    clean_for_qty = re.sub(r'\d+(?:,\d+)?\.\d+\s*%', '', clean_for_qty)
 
-                                    items_list, order_number = process_pdf_deterministic(uploaded_file)
-                                else:
-                                    from pdf_handler import process_pdf
+                    # חיפוש מספר שצמוד לאחת ממילות היחידה (כולל הפוכות!)
+                    # המילים: יח, יחידה, יחידות, חי (יח הפוך), הדיחי (יחידה הפוך)
+                    unit_words = r'(?:יח|יחידה|יחידות|חי|הדיחי|pcs|ea)'
 
-                                    items_list, order_number = process_pdf(uploaded_file, OPENAI_API_KEY)
+                    # בודק קודם "מילה מספר" (למשל "יח 1.00" או "חי 1.00")
+                    sem_matches = re.findall(rf'{unit_words}\s*(\d+)(?:\.\d+)?', clean_for_qty.lower())
+                    if not sem_matches:
+                        # בודק "מספר מילה" (למשל "1.00 יח" או "1.00 חי")
+                        sem_matches = re.findall(rf'(\d+)(?:\.\d+)?\s*{unit_words}', clean_for_qty.lower())
 
-                                original_name = f"Order_{order_number}" if order_number else "Digital_PDF"
+                    if sem_matches:
+                        valid_sem = [q for q in sem_matches if q != '0' and len(q) < 5]
+                        if valid_sem:
+                            qty = valid_sem[0]
 
-                                buffer, new_file_name, warnings, error = process_unified_data(items_list,
-                                                                                              f"{original_name}.xlsx")
+                    # אם לא הייתה מילת יחידה בכלל בשורה (כמו בהזמנות אחרות), קח את המספר הבודד האחרון
+                    if not qty:
+                        qty_matches = re.findall(r'\b(\d+)(?:\.\d+)?\b', clean_for_qty)
+                        valid_qtys = []
+                        for q in qty_matches:
+                            # מסננים את המק"ט עצמו ומספרים לא הגיוניים
+                            if q not in chosen_sku and q != '0' and len(q) < 5:
+                                valid_qtys.append(q)
+                        if valid_qtys:
+                            qty = valid_qtys[-1]
 
-                                if error:
-                                    st.error(error)
-                                elif buffer:
-                                    if warnings:
-                                        with st.expander(f"הערות בקובץ - נמצאו {len(warnings)} הערות (לחצו לצפייה)",
-                                                         expanded=True):
-                                            for warning in warnings:
-                                                if "✅" in warning:
-                                                    st.success(warning)
-                                                elif "❌" in warning:
-                                                    st.error(warning)
-                                                else:
-                                                    st.warning(warning)
-                                    st.success("✨ המסמך פוענח בהצלחה!")
-                                    st.download_button(label="⬇️ הורד קובץ מוכן לפורטל", data=buffer.getvalue(),
-                                                       file_name=new_file_name,
-                                                       mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
-                            except ValueError as ve:
-                                if str(ve) == "SCANNED_PDF_BLOCKED":
-                                    st.error("🛑 **שגיאה: זוהה מסמך סרוק או תמונה.**")
-                                    st.warning(
-                                        "מערכת אטקה מקבלת קבצי Excel, CSV או PDF **דיגיטליים מקוריים בלבד** למניעת טעויות באספקה.")
-                                else:
-                                    st.error(f"❌ שגיאה: {ve}")
-                            except Exception as e:
-                                st.error(f"❌ תקלה בלתי צפויה: {e}")
+                    items_list.append({
+                        'row_num': row_counter,
+                        'sku': chosen_sku,
+                        'qty': qty,
+                        'is_error': qty == ""
+                    })
+                    row_counter += 1
 
-# תחתית הדף
-st.write("")
-st.markdown("---")
-col1, col2 = st.columns([3, 1])
-with col1:
-    if os.path.exists("ATEKA_Logo_He.png"): st.image("ATEKA_Logo_He.png", width=160)
-with col2:
-    if os.path.exists("yg_logo.png"): st.image("yg_logo.png", width=100)
+    return items_list, "Deterministic_Engine"
