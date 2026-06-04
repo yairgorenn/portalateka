@@ -9,7 +9,7 @@ OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 # סיסמת הגישה שהגדרת לפענוח
 PDF_PASSWORD = "9876"
 
-st.set_page_config(page_title="חברת אטקה - מתקן קבצי הזמנה", page_icon="⚙️", layout="centered")
+st.set_page_config(page_title="חברת אטקה - מתקן קבצי הזמנה עריכה יאיר גורן", page_icon="⚙️", layout="centered")
 
 st.markdown("""
     <style>
