@@ -10,7 +10,7 @@ def process_pdf_deterministic(pdf_file):
 
     with pdfplumber.open(pdf_file) as pdf:
         for page in pdf.pages:
-            # חזרנו לחילוץ שורות פשוט ששומר על רווחים
+            # חילוץ טקסט ששומר על המבנה המקורי
             text = page.extract_text(layout=True)
             if not text:
                 continue
@@ -21,28 +21,23 @@ def process_pdf_deterministic(pdf_file):
                 if not line.strip():
                     continue
 
-                # --- 0. דילוג על שורות כותרת ותחתית כדי למנוע זיהוי ח.פ, טלפונים והזמנות ---
-                blacklist = ["עוסק", "מורשה", "ח.פ", "טלפון", "פקס", "ניכויים", "סה\"כ", "סהכ", "מע\"מ", "הזמנת",
-                             "הזמנה", "אסמכתא"]
-                if any(bad in line for bad in blacklist):
-                    continue
-
-                # נטרול רעשים בסיסי
+                # נטרול רעשים בסיסי - מחיקת תאריכים
                 safe_line = re.sub(r'\b\d{1,2}[/.-]\d{1,2}[/.-]\d{2,4}\b', ' ', line)
 
                 words = safe_line.split()
                 chosen_sku = None
                 is_exact_match = False
-                potential_unknown_sku = None
 
-                # 1. חיפוש מק"ט (העוגן של השורה) - ריפוד אפסים בלבד!
+                # 1. חיפוש מק"ט (העוגן של השורה) - התאמה מלאה ומוחלטת בלבד!
                 for word in words:
                     clean_word = word.replace("-", "").replace(" ", "").replace("*", "").replace("'", "").replace('"',
                                                                                                                   "").upper()
 
+                    # סינון מינימלי למילים של אות אחת או שתיים
                     if len(clean_word) < 3:
                         continue
 
+                    # הפעולה היחידה המותרת: ריפוד אפסים משמאל עד ל-9 תווים
                     padded_word = clean_word.zfill(9)
 
                     # בדיקת מק"ט אטקה
@@ -57,23 +52,8 @@ def process_pdf_deterministic(pdf_file):
                         is_exact_match = True
                         break
 
-                    # --- התיקון: לוכד מק"טים לא מוכרים (ללא חובת אותיות באנגלית!) ---
-                    # מוודא שאין אותיות בעברית (זבל), ויש לפחות מספר אחד
-                    has_hebrew = any('\u0590' <= c <= '\u05FF' for c in word)
-                    has_digits = any(c.isdigit() for c in clean_word)
-
-                    # חוסם מחירים (פסיק), אחוזים, סוגריים, וטלפונים (מינוס)
-                    if len(clean_word) >= 6 and has_digits and not has_hebrew:
-                        if "," not in word and "%" not in word and "(" not in word and "-" not in word:
-                            potential_unknown_sku = word.replace("*", "").replace("'", "").replace('"', "")
-
-                # אם סיימנו לסרוק את השורה ולא מצאנו התאמה מושלמת, נשתמש ב"מק"ט החשוד" (כדי שהשורות לא יחליקו!)
-                if not is_exact_match and potential_unknown_sku:
-                    chosen_sku = potential_unknown_sku
-
-                # 2. חילוץ כמות חכם
-                # (שימו לב: הפעולה עכשיו רצה גם אם מצאנו מק"ט לא מוכר, כדי לחלץ לו כמות!)
-                if chosen_sku:
+                # 2. חילוץ כמות - רץ אך ורק אם מצאנו מק"ט ודאי מהקטלוג!
+                if is_exact_match and chosen_sku:
                     qty = ""
 
                     # ניקוי השורה ממחירי ש"ח לפני חיפוש הכמות
@@ -83,8 +63,10 @@ def process_pdf_deterministic(pdf_file):
 
                     unit_words = r'(?:יח|יחידה|יחידות|חי|הדיחי|pcs|ea)'
 
+                    # בודק קודם "מילה מספר" (למשל "יח 1.00" או "חי 1.00")
                     sem_matches = re.findall(rf'{unit_words}\s*(\d+)(?:\.\d+)?', clean_for_qty.lower())
                     if not sem_matches:
+                        # בודק "מספר מילה" (למשל "1.00 יח" או "1.00 חי")
                         sem_matches = re.findall(rf'(\d+)(?:\.\d+)?\s*{unit_words}', clean_for_qty.lower())
 
                     if sem_matches:
@@ -92,6 +74,7 @@ def process_pdf_deterministic(pdf_file):
                         if valid_sem:
                             qty = valid_sem[0]
 
+                    # אם לא הייתה מילת יחידה בכלל בשורה
                     if not qty:
                         qty_matches = re.findall(r'\b(\d+)(?:\.\d+)?\b', clean_for_qty)
                         valid_qtys = []
@@ -105,8 +88,7 @@ def process_pdf_deterministic(pdf_file):
                         'row_num': row_counter,
                         'sku': chosen_sku,
                         'qty': qty,
-                        # השורה תיצבע בכתום אם חסרה כמות, **או** אם המק"ט לא קיים בקטלוג (is_exact_match=False)!
-                        'is_error': not is_exact_match or qty == ""
+                        'is_error': qty == ""
                     })
                     row_counter += 1
 
