@@ -28,20 +28,19 @@ def process_pdf_deterministic(pdf_file):
                 chosen_sku = None
                 is_exact_match = False
 
-                # 1. חיפוש מק"ט (העוגן של השורה)
                 # 1. חיפוש מק"ט (העוגן של השורה) - התייחסות כמחרוזת וריפוד אפסים בלבד!
+                potential_unknown_sku = None
+
                 for word in words:
                     clean_word = word.replace("-", "").replace(" ", "").replace("*", "").replace("'", "").replace('"',
                                                                                                                   "").upper()
 
-                    # סינון מינימלי למילים של אות אחת או שתיים (כמו 'X' או '1P')
                     if len(clean_word) < 3:
                         continue
 
-                    # הפעולה היחידה המותרת: ריפוד אפסים משמאל עד ל-9 תווים (כדי להתאים למק"ט אטקה)
                     padded_word = clean_word.zfill(9)
 
-                    # בדיקת מק"ט אטקה (בודק גם את המחרוזת כפי שהיא וגם עם הוספת האפסים)
+                    # בדיקת מק"ט אטקה
                     if clean_word in ateka_set or padded_word in ateka_set:
                         chosen_sku = word.replace("*", "").replace("'", "").replace('"', "")
                         is_exact_match = True
@@ -53,8 +52,18 @@ def process_pdf_deterministic(pdf_file):
                         is_exact_match = True
                         break
 
-                # 2. חילוץ כמות חכם עם תמיכה בעברית הפוכה ("חי" במקום "יח")
-                if is_exact_match and chosen_sku:
+                    # לוכד מק"טים לא מוכרים: אם המילה לא נמצאה בקטלוג, אבל היא ארוכה ומכילה מספרים
+                    if len(clean_word) >= 7 and any(c.isdigit() for c in clean_word):
+                        potential_unknown_sku = word.replace("*", "").replace("'", "").replace('"', "")
+
+                # אם סיימנו לסרוק את השורה ולא מצאנו התאמה מושלמת, נשתמש ב"מק"ט החשוד" שמצאנו
+                if not is_exact_match and potential_unknown_sku:
+                    chosen_sku = potential_unknown_sku
+                    # is_exact_match נשאר False !
+
+                # 2. חילוץ כמות חכם
+                # (שימו לב: הפעולה עכשיו רצה גם אם מצאנו מק"ט לא מוכר, כדי לחלץ לו כמות!)
+                if chosen_sku:
                     qty = ""
 
                     # ניקוי השורה ממחירי ש"ח לפני חיפוש הכמות
@@ -62,14 +71,10 @@ def process_pdf_deterministic(pdf_file):
                     clean_for_qty = re.sub(r'(?:ש"ח|₪|שקל|שח|חש)\s*\d+(?:,\d+)?\.\d+', '', clean_for_qty)
                     clean_for_qty = re.sub(r'\d+(?:,\d+)?\.\d+\s*%', '', clean_for_qty)
 
-                    # חיפוש מספר שצמוד לאחת ממילות היחידה (כולל הפוכות!)
-                    # המילים: יח, יחידה, יחידות, חי (יח הפוך), הדיחי (יחידה הפוך)
                     unit_words = r'(?:יח|יחידה|יחידות|חי|הדיחי|pcs|ea)'
 
-                    # בודק קודם "מילה מספר" (למשל "יח 1.00" או "חי 1.00")
                     sem_matches = re.findall(rf'{unit_words}\s*(\d+)(?:\.\d+)?', clean_for_qty.lower())
                     if not sem_matches:
-                        # בודק "מספר מילה" (למשל "1.00 יח" או "1.00 חי")
                         sem_matches = re.findall(rf'(\d+)(?:\.\d+)?\s*{unit_words}', clean_for_qty.lower())
 
                     if sem_matches:
@@ -77,12 +82,10 @@ def process_pdf_deterministic(pdf_file):
                         if valid_sem:
                             qty = valid_sem[0]
 
-                    # אם לא הייתה מילת יחידה בכלל בשורה (כמו בהזמנות אחרות), קח את המספר הבודד האחרון
                     if not qty:
                         qty_matches = re.findall(r'\b(\d+)(?:\.\d+)?\b', clean_for_qty)
                         valid_qtys = []
                         for q in qty_matches:
-                            # מסננים את המק"ט עצמו ומספרים לא הגיוניים
                             if q not in chosen_sku and q != '0' and len(q) < 5:
                                 valid_qtys.append(q)
                         if valid_qtys:
@@ -92,7 +95,8 @@ def process_pdf_deterministic(pdf_file):
                         'row_num': row_counter,
                         'sku': chosen_sku,
                         'qty': qty,
-                        'is_error': qty == ""
+                        # השורה תיצבע בכתום אם חסרה כמות, **או** אם המק"ט לא קיים בקטלוג (is_exact_match=False)!
+                        'is_error': not is_exact_match or qty == ""
                     })
                     row_counter += 1
 
