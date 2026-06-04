@@ -21,16 +21,21 @@ def process_pdf_deterministic(pdf_file):
                 if not line.strip():
                     continue
 
+                # --- 0. דילוג על שורות כותרת ותחתית כדי למנוע זיהוי ח.פ, טלפונים והזמנות ---
+                blacklist = ["עוסק", "מורשה", "ח.פ", "טלפון", "פקס", "ניכויים", "סה\"כ", "סהכ", "מע\"מ", "הזמנת",
+                             "הזמנה", "אסמכתא"]
+                if any(bad in line for bad in blacklist):
+                    continue
+
                 # נטרול רעשים בסיסי
                 safe_line = re.sub(r'\b\d{1,2}[/.-]\d{1,2}[/.-]\d{2,4}\b', ' ', line)
 
                 words = safe_line.split()
                 chosen_sku = None
                 is_exact_match = False
-
-                # 1. חיפוש מק"ט (העוגן של השורה) - התייחסות כמחרוזת וריפוד אפסים בלבד!
                 potential_unknown_sku = None
 
+                # 1. חיפוש מק"ט (העוגן של השורה) - ריפוד אפסים בלבד!
                 for word in words:
                     clean_word = word.replace("-", "").replace(" ", "").replace("*", "").replace("'", "").replace('"',
                                                                                                                   "").upper()
@@ -52,14 +57,19 @@ def process_pdf_deterministic(pdf_file):
                         is_exact_match = True
                         break
 
-                    # לוכד מק"טים לא מוכרים: אם המילה לא נמצאה בקטלוג, אבל היא ארוכה ומכילה מספרים
-                    if len(clean_word) >= 7 and any(c.isdigit() for c in clean_word):
-                        potential_unknown_sku = word.replace("*", "").replace("'", "").replace('"', "")
+                    # --- התיקון: לוכד מק"טים לא מוכרים (ללא חובת אותיות באנגלית!) ---
+                    # מוודא שאין אותיות בעברית (זבל), ויש לפחות מספר אחד
+                    has_hebrew = any('\u0590' <= c <= '\u05FF' for c in word)
+                    has_digits = any(c.isdigit() for c in clean_word)
 
-                # אם סיימנו לסרוק את השורה ולא מצאנו התאמה מושלמת, נשתמש ב"מק"ט החשוד" שמצאנו
+                    # חוסם מחירים (פסיק), אחוזים, סוגריים, וטלפונים (מינוס)
+                    if len(clean_word) >= 6 and has_digits and not has_hebrew:
+                        if "," not in word and "%" not in word and "(" not in word and "-" not in word:
+                            potential_unknown_sku = word.replace("*", "").replace("'", "").replace('"', "")
+
+                # אם סיימנו לסרוק את השורה ולא מצאנו התאמה מושלמת, נשתמש ב"מק"ט החשוד" (כדי שהשורות לא יחליקו!)
                 if not is_exact_match and potential_unknown_sku:
                     chosen_sku = potential_unknown_sku
-                    # is_exact_match נשאר False !
 
                 # 2. חילוץ כמות חכם
                 # (שימו לב: הפעולה עכשיו רצה גם אם מצאנו מק"ט לא מוכר, כדי לחלץ לו כמות!)
