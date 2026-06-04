@@ -32,6 +32,8 @@ def process_pdf_deterministic(pdf_file):
                 for word in words:
                     clean_word = word.replace("-", "").replace(" ", "").replace("*", "").replace("'", "").replace('"',
                                                                                                                   "").upper()
+                    if len(clean_word) < 5:
+                        continue
 
                     if clean_word in ateka_set or clean_word.lstrip('0') in ateka_set:
                         chosen_sku = word.replace("*", "").replace("'", "").replace('"', "")
