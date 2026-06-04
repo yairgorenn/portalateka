@@ -29,18 +29,26 @@ def process_pdf_deterministic(pdf_file):
                 is_exact_match = False
 
                 # 1. חיפוש מק"ט (העוגן של השורה)
+                # 1. חיפוש מק"ט (העוגן של השורה) - התייחסות כמחרוזת וריפוד אפסים בלבד!
                 for word in words:
                     clean_word = word.replace("-", "").replace(" ", "").replace("*", "").replace("'", "").replace('"',
                                                                                                                   "").upper()
-                    if len(clean_word) < 5:
+
+                    # סינון מינימלי למילים של אות אחת או שתיים (כמו 'X' או '1P')
+                    if len(clean_word) < 3:
                         continue
 
-                    if clean_word in ateka_set or clean_word.lstrip('0') in ateka_set:
+                    # הפעולה היחידה המותרת: ריפוד אפסים משמאל עד ל-9 תווים (כדי להתאים למק"ט אטקה)
+                    padded_word = clean_word.zfill(9)
+
+                    # בדיקת מק"ט אטקה (בודק גם את המחרוזת כפי שהיא וגם עם הוספת האפסים)
+                    if clean_word in ateka_set or padded_word in ateka_set:
                         chosen_sku = word.replace("*", "").replace("'", "").replace('"', "")
                         is_exact_match = True
                         break
 
-                    if clean_word in vendor_to_ateka or clean_word.lstrip('0') in vendor_to_ateka:
+                    # בדיקת מק"ט יצרן
+                    if clean_word in vendor_to_ateka or padded_word in vendor_to_ateka:
                         chosen_sku = word.replace("*", "").replace("'", "").replace('"', "")
                         is_exact_match = True
                         break
