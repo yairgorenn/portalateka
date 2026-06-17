@@ -1,15 +1,45 @@
 import streamlit as st
 import os
+import requests
 
 from excel_handler import process_excel, process_unified_data
 from pdf_handler import process_pdf
 
-# משיכת מפתח ה-API ממשתני הסביבה של השרת (Railway)
+# משיכת מפתחות ה-API ומשתני הסביבה של השרת (Railway)
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
+TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
+TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
+
 # סיסמת הגישה שהגדרת לפענוח
 PDF_PASSWORD = "9876"
 
-st.set_page_config(page_title="חברת אטקה - מתקן קבצי הזמנה עריכה יאיר גורן", page_icon="⚙️", layout="centered")
+
+# פונקציה לשליחת התראה לטלגרם
+def send_telegram_alert(order_number, rows_count, warnings_count):
+    if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
+        return  # מדלג אם המשתנים לא מוגדרים בשרת
+
+    message = (
+        f"🚀 בקשת פענוח חדשה במערכת אטקה!\n"
+        f"📄 מס' הזמנה/קובץ: {order_number}\n"
+        f"✅ שורות שפוענחו: {rows_count}\n"
+        f"⚠️ שורות בכתום (דורשות בדיקה): {warnings_count}"
+    )
+
+    url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
+    payload = {
+        "chat_id": TELEGRAM_CHAT_ID,
+        "text": message
+    }
+
+    try:
+        # שליחת ההודעה מאחורי הקלעים ללא עיכוב המשתמש
+        requests.post(url, json=payload, timeout=5)
+    except Exception as e:
+        print(f"Telegram error: {e}")
+
+
+st.set_page_config(page_title="חברת אטקה - מתקן קבצי הזמנה יאיר גורן", page_icon="⚙️", layout="centered")
 
 st.markdown("""
     <style>
@@ -22,7 +52,7 @@ st.markdown("""
     """, unsafe_allow_html=True)
 
 st.title("⚙️ מערכת חכמה לקליטת הזמנות")
-st.write("העלו קובץ Excel, CSV או **PDF**. המערכת תבדוק מק\"טים ותכין קובץ נקי לפורטל אטקה.")
+st.write("העלו קובץ Excel, CSV או **PDF**. המערכת תבדוק מק\"טים ותכין קובץ נקי לפורטל אטקה. לשאלות ותמיכה יאיר גורן")
 
 # המערכת מקבלת רק קבצי מקור - הורדנו תמיכה ב-png/jpg
 uploaded_file = st.file_uploader("בחרו קובץ", type=["xlsx", "csv", "pdf"], label_visibility="collapsed")
@@ -66,9 +96,6 @@ if uploaded_file is not None:
                     if st.button("🚀 התחל פענוח"):
                         with st.spinner('המערכת מעבדת את המסמך...'):
                             try:
-
-                                from pdf_handler import process_pdf
-
                                 items_list, order_number = process_pdf(uploaded_file, OPENAI_API_KEY)
 
                                 original_name = f"Order_{order_number}" if order_number else "Digital_PDF"
@@ -79,6 +106,13 @@ if uploaded_file is not None:
                                 if error:
                                     st.error(error)
                                 elif buffer:
+                                    # חילוץ נתונים לשליחה בטלגרם
+                                    rows_count = len(items_list) if items_list else 0
+                                    warnings_count = len(warnings) if warnings else 0
+
+                                    # הפעלת שליחת ההודעה לטלגרם
+                                    send_telegram_alert(original_name, rows_count, warnings_count)
+
                                     if warnings:
                                         with st.expander(f"הערות בקובץ - נמצאו {len(warnings)} הערות (לחצו לצפייה)",
                                                          expanded=True):
