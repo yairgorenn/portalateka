@@ -5,3 +5,4 @@ openai~=2.38.0
 pydantic~=2.13.4
 PyMuPDF
 pdfplumber~=0.11.9
+requests~=2.34.2
