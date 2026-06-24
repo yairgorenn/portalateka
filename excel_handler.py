@@ -43,6 +43,7 @@ def process_unified_data(items_list, original_file_name):
 
     cleaned_skus = []
     cleaned_qtys = []
+    row_notes = []  # רשימה חדשה לאיסוף ההערות לעמודה C
     warnings = []
     row_has_error = []
 
@@ -52,10 +53,14 @@ def process_unified_data(items_list, original_file_name):
         orig_qty = item.get('qty', '')
         is_error = item.get('is_error', False)
 
+        current_row_notes = []  # איסוף ההערות לשורה הספציפית הזו
+
         # --- א) לוגיקת מק"ט והצלבת קטלוג ---
         if pd.isna(orig_sku) or str(orig_sku).strip() == "" or str(orig_sku).strip().lower() == 'nan':
             sku_val = ""
-            warnings.append(f"⚠️ שורה {row_num}: שים לב - מקט לא מלא (חסר ערך).")
+            msg = "מקט לא מלא (חסר ערך)"
+            current_row_notes.append(f"⚠️ {msg}")
+            warnings.append(f"⚠️ שורה {row_num}: שים לב - {msg}.")
             is_error = True
         else:
             sku_str = str(orig_sku).strip()
@@ -71,7 +76,9 @@ def process_unified_data(items_list, original_file_name):
                 matched_ateka = sku_str if sku_str in ateka_set else X_no_zeros
                 if matched_ateka.lstrip('0') == '888888':
                     sku_val = sku_str
-                    warnings.append(f"❌ שורה {row_num}: הפריט לא קיים במערכת אטקה (מקט 888888). הושאר מק\"ט מקורי.")
+                    msg = "הפריט לא קיים במערכת (מקט 888888). הושאר מק\"ט מקורי"
+                    current_row_notes.append(f"❌ {msg}")
+                    warnings.append(f"❌ שורה {row_num}: {msg}.")
                     is_error = True
                 else:
                     sku_val = matched_ateka.zfill(SKU_LENGTH)
@@ -81,16 +88,22 @@ def process_unified_data(items_list, original_file_name):
                 matched_ateka = vendor_to_ateka.get(X_upper) or vendor_to_ateka.get(X_upper.lstrip('0'))
                 if matched_ateka.lstrip('0') == '888888':
                     sku_val = sku_str
-                    warnings.append(f"❌ שורה {row_num}: הפריט לא קיים במערכת אטקה (מקט 888888). הושאר מק\"ט יצרן.")
+                    msg = "הפריט לא קיים במערכת (מקט 888888). הושאר מק\"ט יצרן"
+                    current_row_notes.append(f"❌ {msg}")
+                    warnings.append(f"❌ שורה {row_num}: {msg}.")
                     is_error = True
                 else:
                     sku_val = matched_ateka.zfill(SKU_LENGTH)
-                    warnings.append(f"✅ שורה {row_num}: תקין - הומר ממק\"ט יצרן למק\"ט אטקה ({sku_val}).")
+                    msg = "הומר ממק\"ט יצרן למק\"ט אטקה"
+                    current_row_notes.append(f"✅ {msg}")
+                    warnings.append(f"✅ שורה {row_num}: תקין - {msg} ({sku_val}).")
 
             # 3. לא קיים בשום מקום
             else:
                 sku_val = sku_str
-                warnings.append(f"❌ שורה {row_num}: מק\"ט לא מוכר במערכת – אנא בדוק ({sku_str}).")
+                msg = "מק\"ט לא מוכר במערכת – אנא בדוק"
+                current_row_notes.append(f"❌ {msg}")
+                warnings.append(f"❌ שורה {row_num}: {msg} ({sku_str}).")
                 is_error = True
 
         # --- ב) בדיקת כמות ---
@@ -107,7 +120,9 @@ def process_unified_data(items_list, original_file_name):
                 pass
 
         if not qty_is_valid:
-            warnings.append(f"⚠️ שורה {row_num}: שים לב חסרה כמות תקינה.")
+            msg = "חסרה כמות תקינה"
+            current_row_notes.append(f"⚠️ {msg}")
+            warnings.append(f"⚠️ שורה {row_num}: שים לב - {msg}.")
             is_error = True
             if pd.isna(orig_qty) or str(orig_qty).strip() == "":
                 qty_val = ""
@@ -116,8 +131,11 @@ def process_unified_data(items_list, original_file_name):
         cleaned_qtys.append(qty_val)
         row_has_error.append(is_error)
 
-    # --- ג) יצירת האקסל (הוזז שמאלה כדי שירוץ אחרי הלולאה!) ---
-    df_clean = pd.DataFrame({'מק"ט': cleaned_skus, 'כמות': cleaned_qtys})
+        # חיבור כל ההערות של השורה למחרוזת אחת (למקרה שיש גם שגיאת מק"ט וגם כמות)
+        row_notes.append(" | ".join(current_row_notes))
+
+    # --- ג) יצירת האקסל עם עמודת ההערות החדשה ---
+    df_clean = pd.DataFrame({'מק"ט': cleaned_skus, 'כמות': cleaned_qtys, 'הערות מערכת': row_notes})
     buffer = io.BytesIO()
     with pd.ExcelWriter(buffer, engine='openpyxl') as writer:
         df_clean.to_excel(writer, index=False)
@@ -154,11 +172,13 @@ def process_unified_data(items_list, original_file_name):
 
         worksheet.column_dimensions['A'].width = 20
         worksheet.column_dimensions['B'].width = 15
+        worksheet.column_dimensions['C'].width = 50  # הוספת רוחב לעמודת ההערות החדשה
 
     original_name, _ = os.path.splitext(original_file_name)
     new_file_name = f"{original_name}_מוכן_לפורטל.xlsx"
 
     return buffer, new_file_name, warnings, None
+
 
 def process_excel(uploaded_file, original_file_name):
     """
