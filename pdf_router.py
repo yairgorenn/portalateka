@@ -39,19 +39,31 @@ def split_pdf_to_orders(file_bytes_io):
     split_orders = []
 
     current_writer = PdfWriter()
-    current_order_name = "Order_Part_1"  # שם זמני אם העמוד הראשון לא מכיל זיהוי ודאי
+    current_order_name = "Order_Part_1"
 
     for i, page in enumerate(reader.pages):
         text = page.extract_text()
         found_name = find_order_name_in_text(text)
 
-        # אם מצאנו זיהוי להזמנה חדשה, וזה לא העמוד הראשון לגמרי,
-        # ויש כבר עמודים שאספנו להזמנה הקודמת -> נחתוך ונשמור את הקודמת.
-        if found_name and i != 0 and len(current_writer.pages) > 0:
+        # האם מצאנו שם הזמנה, והוא *שונה* מהשם הנוכחי שאנחנו אוספים?
+        is_different_order = False
+        if found_name and found_name != current_order_name:
+            is_different_order = True
+
+        # הגנה 1: אם מצאנו ביטוי כללי (New_Order) אבל יש לנו כבר שם אמיתי, לא לפצל
+        if is_different_order and found_name == "New_Order" and current_order_name != "Order_Part_1":
+            is_different_order = False
+
+        # הגנה 2: אם זה עמוד מתקדם שמצאנו בו שם לראשונה, לא לפצל מהעמוד הראשון אלא לאחד אותם
+        if is_different_order and current_order_name == "Order_Part_1":
+            is_different_order = False
+
+        # אם אכן מדובר בהזמנה חדשה ושונה, ויש לנו כבר עמודים בקובץ הקודם
+        if is_different_order and i != 0 and len(current_writer.pages) > 0:
             # סגירת הקובץ הקודם לתוך הזיכרון
             pdf_buffer = io.BytesIO()
             current_writer.write(pdf_buffer)
-            pdf_buffer.seek(0)  # החזרת הסמן לתחילת הקובץ
+            pdf_buffer.seek(0)
 
             split_orders.append({
                 "pdf_obj": pdf_buffer,
@@ -63,13 +75,17 @@ def split_pdf_to_orders(file_bytes_io):
             current_order_name = found_name
 
         elif found_name and i == 0:
-            # אם מצאנו את השם ממש בעמוד הראשון, נעדכן את השם
+            # עמוד ראשון לגמרי - קביעת השם הראשוני
             current_order_name = found_name
 
-        # נוסיף את העמוד הנוכחי לקובץ הפתוח
+        elif found_name and current_order_name == "Order_Part_1":
+            # הגנה 2 המשך: מעדכנים רטרואקטיבית את שם ההזמנה לעמודים הראשונים
+            current_order_name = found_name
+
+        # בכל מקרה - מוסיפים את העמוד לקובץ הפתוח הנוכחי
         current_writer.add_page(page)
 
-    # בסיום הלולאה, אסור לשכוח לשמור את ההזמנה האחרונה שנשארה פתוחה
+    # סגירת ההזמנה האחרונה בסיום הלולאה
     if len(current_writer.pages) > 0:
         pdf_buffer = io.BytesIO()
         current_writer.write(pdf_buffer)
