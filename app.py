@@ -68,15 +68,6 @@ if uploaded_file is not None:
             if error:
                 st.error(error)
             elif buffer:
-                if warnings:
-                    with st.expander(f"הערות בקובץ - נמצאו {len(warnings)} הערות (לחצו לצפייה)", expanded=True):
-                        for warning in warnings:
-                            if "✅" in warning:
-                                st.success(warning)
-                            elif "❌" in warning:
-                                st.error(warning)
-                            else:
-                                st.warning(warning)
                 st.success("✅ הקובץ פוענח בהצלחה ומוכן להורדה!")
 
                 if warnings:
