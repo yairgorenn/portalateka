@@ -73,7 +73,7 @@ if uploaded_file is not None:
                                 total_orders = len(split_orders)
 
                             if total_orders == 1:
-                                st.info("🎯 פוענחה הזמנה אחת מהמסמך. ניגש לעבודה...")
+                                pass
                             else:
                                 st.info(f"✂️ הקובץ פוצל ל-{total_orders} הזמנות שונות! מפענח אותן אחת-אחת...")
                                 # --- יצירת "מקום שמור" לאזהרה שתשתנה בסיום ---
