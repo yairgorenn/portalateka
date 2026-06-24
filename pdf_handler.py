@@ -1,5 +1,6 @@
 import pdfplumber
 import io
+import re
 from openai import OpenAI
 from pydantic import BaseModel, Field
 from excel_handler import load_catalog
@@ -8,9 +9,10 @@ from excel_handler import load_catalog
 class OrderRow(BaseModel):
     row_number: int = Field(description="מספר השורה")
     product_description: str = Field(description="תיאור המוצר המלא.")
-    skus_found: list[str] = Field(description="רשימת המק\"טים. חובה להעתיק במדויק!")
+    skus_found: list[str] = Field(
+        description="רשימת כל המחרוזות בשורה שנראות כמו מק\"ט (יצרן או ספק). חובה לאסוף את כולם!")
     qty: str = Field(
-        description="הכמות המוזמנת. חוק ברזל: החזר רק את הכמות המדויקת כמספר שלם! אם הכמות חסרה, לא ברורה לחלוטין, או שיש חשש להסטה משורה אחרת - החזר מחרוזת ריקה \"\" ואל תנחש בשום אופן!"
+        description="הכמות המוזמנת. חפש מספרים שמופיעה לידם המילה 'יח', 'יח.', או 'יח''."
     )
 
 
@@ -24,23 +26,22 @@ def process_pdf(pdf_file, openai_api_key):
     if not file_bytes:
         raise Exception("הקובץ שהועלה ריק.")
 
+    # מנוע קריאה מרחבי: שומר על העמודות והרווחים המדויקים של המסמך!
     pdf_bytes_io = io.BytesIO(file_bytes)
-    # חילוץ טקסט גולמי בצורה ששומרת על מבנה הטבלה
     with pdfplumber.open(pdf_bytes_io) as pdf:
         extracted_text = "\n".join([page.extract_text(layout=True) for page in pdf.pages])
 
     client = OpenAI(api_key=openai_api_key)
 
-    # הפרומפט החדש והקשוח
+    # הפרומפט המשופר והקשוח
     system_instruction = (
-        "אתה עוזר מומחה לחילוץ נתונים מהזמנות רכש של חברת 'אטקה'. "
-        "עליך לחלץ פריטים מתוך טבלת ההזמנה בלבד. "
-        "כללים קריטיים: \n"
-        "1. עמודת 'שורה' היא מספר סידורי בלבד. חלץ אותה לשדה row_number, אך לעולם אל תבלבל בינה לבין עמודת הכמות.\n"
-        "2. עמודת 'כמות' היא הכמות להזמנה. אם הכמות לא מופיעה במפורש בעמודת הכמות, או שיש ספק - אל תנחש! החזר מחרוזת ריקה.\n"
-        "3. אל תתייחס לנתונים בכותרת המסמך (כגון 'מספר ספק', 'תאריך', 'שם פרויקט'). התמקד רק בטבלה עצמה.\n"
-        "4. אם כמות מופיעה בצורה של '80.00' או '12.00', החזר אותה כמספר שלם ('80', '12').\n"
-        "5. בצע סריקה קפדנית: אם יש ערכים בעמודת הכמות בכל השורות (למשל '12' בכל השורות), וודא שאתה משייך את ה-'12' לכל פריט, ולא את מספר השורה."
+        "אתה מומחה לחילוץ נתונים מטבלאות הזמנות רכש מורכבות בעברית/אנגלית.\n"
+        "חוקים קריטיים להצלחה:\n"
+        "1. כמויות (qty): הכמות היא מספר. לעיתים קרובות מופיע לידה או מתחתיה הצירוף 'יח', 'יח.', 'יח'' או 'EA'. אם הכמות כתובה כ-'80.00' החזר '80'. אל תבלבל עם עמודת ה'שורה'!\n"
+        "2. מק\"טים (skus_found): חלץ את *כל* המחרוזות האלפנומריות בשורה שנראות כמו מק\"ט ספק או מק\"ט יצרן (למשל 1SDA0..., או 0025...). \n"
+        "**אזהרה קריטית:** התעלם לחלוטין ממספרי פרויקט שמתחילים ב-PR (כמו PR26E00489) - הם אינם מק\"טים ואסור להכניס אותם לרשימה!\n"
+        "3. אל תתייחס לנתונים בכותרת המסמך. התמקד בטבלה עצמה בלבד.\n"
+        "4. אם יש ספק לגבי הכמות, או שהיא חסרה, החזר מחרוזת ריקה \"\". אל תנחש."
     )
 
     completion = client.beta.chat.completions.parse(
@@ -54,13 +55,54 @@ def process_pdf(pdf_file, openai_api_key):
 
     result = completion.choices[0].message.parsed
 
-    # המרה לפורמט הפנימי של המערכת
+    # טעינת הקטלוג לטובת סינון חכם בפייתון
+    ateka_set, vendor_to_ateka = load_catalog("PB.csv")
+
     items_list = []
     for item in result.items:
+        # סינון נוסף בפייתון למקרה שה-AI טעה והכניס מספר פרויקט
+        valid_skus = [s for s in item.skus_found if s and not s.upper().startswith("PR")]
+
+        chosen_sku = ""
+        is_exact_match = False
+
+        # שלב 1: חיפוש התאמה מלאה (אטקה)
+        for candidate in valid_skus:
+            clean_to_check = candidate.replace(" ", "").replace("-", "")
+            if clean_to_check in ateka_set or clean_to_check.lstrip('0') in ateka_set:
+                chosen_sku = candidate
+                is_exact_match = True
+                break
+
+        # שלב 2: חיפוש התאמה מלאה (יצרן)
+        if not is_exact_match:
+            for candidate in valid_skus:
+                clean_to_check = candidate.upper().replace(" ", "").replace("-", "")
+                if clean_to_check in vendor_to_ateka or clean_to_check.lstrip('0') in vendor_to_ateka:
+                    chosen_sku = candidate
+                    is_exact_match = True
+                    break
+
+        # שלב 3: חוסר התאמה מוחלט - ניקח את המחרוזת הארוכה ביותר (לרוב זה המק"ט האמיתי)
+        if not is_exact_match:
+            chosen_sku = max(valid_skus, key=len) if valid_skus else ""
+
+        # ניקוי הכמות (הסרת מילים כמו "יח" אם ה-AI הכניס אותן בטעות)
+        clean_qty = item.qty
+        if clean_qty:
+            clean_qty = re.sub(r'[^\d.]', '', clean_qty)  # משאיר רק ספרות ונקודה עשרונית
+            if clean_qty.endswith('.'):
+                clean_qty = clean_qty[:-1]
+            try:
+                # הופך "80.00" ל-"80"
+                clean_qty = str(int(float(clean_qty)))
+            except ValueError:
+                clean_qty = ""
+
         items_list.append({
             'row_num': item.row_number,
-            'sku': item.skus_found[0] if item.skus_found else "",
-            'qty': item.qty
+            'sku': chosen_sku,
+            'qty': clean_qty
         })
 
     return items_list, result.order_number
