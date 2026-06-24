@@ -86,7 +86,7 @@ if uploaded_file is not None:
                                 order_name = order_dict["order_name"]
                                 pdf_buffer = order_dict["pdf_obj"]
 
-                                st.markdown(f"### 📦 מעבד: {order_name} ({i + 1}/{total_orders})")
+                                #st.markdown(f"### 📦 מעבד: {order_name} ({i + 1}/{total_orders})")
 
                                 # שלב א': חיתוך הקובץ למנות (הזמנות)
                                 with st.spinner("מנתח את הקובץ ומחפש הזמנות רכש..."):
