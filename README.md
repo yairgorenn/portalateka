@@ -1,85 +1,51 @@
-# Ateka Order Processing & Automation Portal ⚙️
+# Ateka Automation & Order Processing Portal ⚙️
 
-This repository contains an advanced, automated order processing and validation tool built for B2B purchase orders. It intakes raw order files (Excel, CSV, and Native PDFs) from various ERP systems, extracts exact SKUs and quantities, maps them to an internal catalog, and generates a clean, validated, and formatted Excel file ready for import into the Ateka Portal.
+מערכת אוטומטית מתקדמת לקליטה, פיצול ופענוח של הזמנות רכש מלקוחות (בפורמט אקסל, CSV ו-PDF דיגיטלי). המערכת מחלצת את המק"טים והכמויות, מצליבה אותם מול קטלוג החברה (`PB.csv`), מתקנת פורמטים, ומייצרת קובץ אקסל נקי ומיושר לימין המוכן לטעינה ישירה לפורטל/פריוריטי.
 
-## 🌟 Key Features
+---
 
-* **Zero-Hallucination Native PDF Parsing:**
-    * Automatically detects and extracts raw text from digital/native PDFs using `PyMuPDF` with 100% mechanical precision. 
-    * Eliminates AI hallucinations, OCR errors, and synthetic data generation by passing pure text to the AI for structuring.
-* **Strict Image/Scan Blocking (Quality Control):**
-    * Actively detects if a user uploads a scanned PDF or image (where text cannot be extracted deterministically).
-    * Blocks the upload and prompts the user to provide a native ERP-generated PDF to ensure absolute data integrity.
-* **Smart Catalog Cross-Referencing:**
-    * Loads the internal SKU catalog (`PB.csv`) into a fast in-memory cache using Pandas.
-    * Sanitizes inputs (strips spaces, dashes, leading zeros).
-    * Prioritizes internal 'Ateka' SKUs; if missing, maps 'Vendor/Manufacturer' SKUs to Ateka SKUs automatically.
-    * Blocks placeholder/synthetic SKUs (e.g., `888888`) and flags unrecognized items.
-* **Rigorous Data Enforcement:**
-    * Enforces a strict 9-character Ateka SKU format using zero-padding (`zfill`).
-    * Implements strict Pydantic parsing rules for AI outputs to ensure quantities are always returned as pure integers (ignoring string artifacts like 'pcs' or floating points).
-* **Interactive Streamlit UI:**
-    * Right-to-Left (RTL) styled interface.
-    * Immediate validation feedback via color-coded alerts (Success ✅, Warning ⚠️, Error ❌).
-    * Secured PDF processing requiring a password, while Excel processing remains open.
-* **Production Ready:**
-    * Optimized for deployment on Railway with automatic environment variable handling.
+## 🌟 תכונות מרכזיות (גרסת ייצור)
 
-## 🏗️ Architecture & Flow
+* **מנגנון פיצול PDF חכם (`pdf_router.py`):** מזהה אוטומטית קבצי PDF מרוכזים המכילים מספר הזמנות רכש (לפי תבנית `PO`), ומפצל אותם בזיכרון לקבצים נפרדים כדי למנוע כפילויות וחריגה ממגבלות ה-AI.
+* **עבודה דו-ערוצית במקביל:**
+  * **ממשק אתר (Streamlit):** לעבודה ידנית אינטראקטיבית וקבלת קבצי הורדה מידיים במסך.
+  * **שרת רקע למייל (`email_worker.py`):** מאזין 24/7 לתיבת המייל, מעבד קבצים (כולל החזרת מייל מרוכז עם 60 אקסלים במקביל) ומשיב למשתמש במייל מעוצב ומיושר לימין (RTL).
+* **ניהול שגיאות בתוך האקסל:** כל ההערות, התקלות או הצלבות המק"טים מושתלות ישירות בתוך קובץ האקסל המיוצר ב**עמודה C** (`הערות מערכת`), לצד צביעת השורה בכתום לזיהוי מהיר.
+* **אבטחה וחסימת סריקות:** חסימה מוחלטת של קבצים סרוקים או תמונות כדי למנוע שגיאות אנוש, וחסימת שולחים שאינם מדומיינים מורשים של החברה.
+* **התראות טלגרם בזמן אמת:** שליחת דיווח מיידי על כל קובץ או תת-הזמנה שפוענחו בהצלחה לניטור ובקרה על השימוש במערכת.
 
-1.  **Input:** User uploads a `.xlsx`, `.csv`, or `.pdf` file.
-2.  **Routing & Extraction:**
-    * *Excel/CSV* goes directly to the Python verification engine (`excel_handler.py`).
-    * *PDFs* are analyzed by `pdf_handler.py`. If it's a native PDF, the text is extracted and structured via OpenAI API (using strict Pydantic schemas). If it's a scan, the process halts with a `SCANNED_PDF_BLOCKED` error.
-3.  **Validation Engine:** The parsed SKU list is run against the cached `PB.csv` catalog to determine the valid Ateka SKU.
-4.  **Output:** A dynamically formatted `.xlsx` file (`openpyxl`) is generated in-memory and offered for download.
+---
 
-## 🛠️ Tech Stack
+## 📂 מבנה קבצי הפרויקט
 
-* **Language:** Python 3.10+
-* **Web Framework:** Streamlit
-* **Data Handling:** Pandas
-* **Excel Generation:** openpyxl
-* **PDF Processing:** PyMuPDF (`fitz`)
-* **AI Engine:** OpenAI API (`gpt-4o`) with Structured Outputs (Pydantic)
+* `app.py`: ממשק המשתמש הוויזואלי (Streamlit) הכולל מנגנון אבטחה מבוסס סיסמה ל-PDF.
+* `email_worker.py`: שרת הרקע המאזין לתיבת המייל (IMAP/SMTP) ומטפל בהודעות משולחים מורשים.
+* `pdf_router.py`: הנתב האחראי על קריאת ה-PDF, זיהוי מספרי הזמנות וחיתוך חכם של קבצי ענק.
+* `pdf_handler.py`: מנוע ה-AI המחלץ את הנתונים הטבלאיים בצורה מובנית בעזרת OpenAI API (`gpt-4o`).
+* `excel_handler.py`: המוח הלוגי של המערכת - טוען את הקטלוג לזיכרון (`lru_cache`), מנקה מק"טים, מוסיף אפסים מובילים ומייצר את קובץ ה-Excel הסופי.
+* `telegram_handler.py`: שירות משותף לשליחת הודעות ניטור לבוט הטלגרם.
 
-## 📂 File Structure
+---
 
-* `app.py`: Main Streamlit application and UI routing.
-* `excel_handler.py`: Core logic for caching the catalog, validating SKUs, standardizing quantities, and generating the final Excel file.
-* `pdf_handler.py`: Native text extraction logic interacting with the OpenAI API for structuring, including the anti-scan safety block.
-* `PB.csv`: The internal database mapping Vendor SKUs to Ateka SKUs (Not tracked/uploaded if sensitive).
-* `requirements.txt`: Python dependencies.
+## ☁️ משתני סביבה (Environment Variables) ב-Railway
 
-## 🚀 Setup & Installation
+עבור הרצה תקינה של שני השירותים ב-Railway, יש להגדיר את משתני הסביבה הבאים:
 
-1.  **Clone the repository:**
-    ```bash
-    git clone https://github.com/yourusername/ateka-order-portal.git
-    cd ateka-order-portal
-    ```
+| שם המשתנה | תפקיד | הגדרה ב-Web App | הגדרה ב-Email Worker |
+| :--- | :--- | :---: | :---: |
+| `OPENAI_API_KEY` | מפתח הגישה הרשמי ל-OpenAI | ✅ | ✅ |
+| `EMAIL_ADDRESS` | כתובת המייל של הבוט (`@gmail.com`) | ❌ | ✅ |
+| `EMAIL_PASSWORD` | סיסמת אפליקציה בת 16 תווים של גוגל | ❌ | ✅ |
+| `TELEGRAM_BOT_TOKEN` | הטוקן של בוט הטלגרם של המערכת | ✅ | ✅ |
+| `TELEGRAM_CHAT_ID` | מזהה הצ'אט האישי לקבלת ההתראות | ✅ | ✅ |
 
-2.  **Create a Virtual Environment & Install Dependencies:**
-    ```bash
-    python -m venv .venv
-    source .venv/bin/activate  # On Windows: .venv\Scripts\activate
-    pip install -r requirements.txt
-    ```
+---
 
-3.  **Environment Variables:**
-    Create a `.env` file or export the following variable:
-    ```bash
-    OPENAI_API_KEY=sk-your-openai-api-key
-    ```
+## 🚀 פקודות הרצה (Start Commands)
 
-4.  **Run the App:**
-    ```bash
-    streamlit run app.py
-    ```
+המערכת רצה ב-Railway כשני שירותים נפרדים לחלוטין הניזונים מאותו הריפוזיטורי:
+1. **עבור ה-Web App (האתר):** `streamlit run app.py`
+2. **עבור ה-Email Worker (שרת המייל):** `python email_worker.py`
 
-## ☁️ Deployment (Railway)
-
-1. Connect your GitHub repository to Railway.
-2. In the Railway dashboard, navigate to the `Variables` tab.
-3. Add `OPENAI_API_KEY` with your secret key.
-4. Railway will automatically build and deploy the Streamlit container based on `requirements.txt`.
+---
+### 🔒 סטטוס גרסה: v1.0.0-PRO (מוכן לבדיקות משתמשים - QA)
