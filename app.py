@@ -1,6 +1,7 @@
 import streamlit as st
 import os
-import requests
+import time
+from pdf_router import split_pdf_to_orders
 
 from excel_handler import process_excel, process_unified_data
 from pdf_handler import process_pdf
@@ -65,44 +66,103 @@ if uploaded_file is not None:
                     st.error("❌ תקלת שרת: מפתח API לא מוגדר ב-Railway. אנא פנה למנהל המערכת.")
                 else:
                     if st.button("🚀 התחל פענוח"):
-                        with st.spinner('המערכת מעבדת את המסמך...'):
-                            try:
-                                items_list, order_number = process_pdf(uploaded_file, OPENAI_API_KEY)
+                        try:
+                            # שלב א': חיתוך הקובץ למנות (הזמנות)
+                            with st.spinner("מנתח את הקובץ ומחפש הזמנות רכש..."):
+                                split_orders = split_pdf_to_orders(uploaded_file)
+                                total_orders = len(split_orders)
 
-                                original_name = f"Order_{order_number}" if order_number else "Digital_PDF"
+                            if total_orders == 1:
+                                st.info("🎯 פוענחה הזמנה אחת מהמסמך. ניגש לעבודה...")
+                            else:
+                                st.info(f"✂️ הקובץ פוצל ל-{total_orders} הזמנות שונות! מפענח אותן אחת-אחת...")
+                                # --- יצירת "מקום שמור" לאזהרה שתשתנה בסיום ---
+                                warning_placeholder = st.empty()
+                                warning_placeholder.warning(
+                                    "⚠️ המערכת מעבדת מספר הזמנות ברצף. **נא לא ללחוץ על כפתורי ההורדה** עד לסיום מלא של כל הרשימה (כדי לא לעצור את התהליך)!")
 
-                                buffer, new_file_name, warnings, error = process_unified_data(items_list,
-                                                                                              f"{original_name}.xlsx")
+                            # שלב ב': ריצה על כל הזמנה בנפרד
+                            for i, order_dict in enumerate(split_orders):
+                                order_name = order_dict["order_name"]
+                                pdf_buffer = order_dict["pdf_obj"]
 
-                                if error:
-                                    st.error(error)
-                                elif buffer:
-                                    # חילוץ נתונים לשליחה בטלגרם
-                                    rows_count = len(items_list) if items_list else 0
-                                    warnings_count = len(warnings) if warnings else 0
+                                st.markdown(f"### 📦 מעבד: {order_name} ({i + 1}/{total_orders})")
 
-                                    # הפעלת שליחת ההודעה לטלגרם
-                                    send_telegram_message(original_name, rows_count, warnings_count)
+                                # שלב א': חיתוך הקובץ למנות (הזמנות)
+                                with st.spinner("מנתח את הקובץ ומחפש הזמנות רכש..."):
+                                    split_orders = split_pdf_to_orders(uploaded_file)
+                                    total_orders = len(split_orders)
 
-                                    st.success("✅ הקובץ פוענח בהצלחה ומוכן להורדה!")
-
-                                    if warnings:
-                                        st.warning(
-                                            f"⚠️ שימו לב: המערכת זיהתה **{len(warnings)}** שורות שדורשות את תשומת לבכם.\n\nאנא פתחו את הקובץ המצורף ובדקו את השורות המסומנות בכתום (הסבר מפורט ממתין לכם בעמודה C).")
-                                    else:
-                                        st.info("🎯 הקובץ תקין לחלוטין - לא נמצאו הערות מערכת.")
-                                    st.download_button(label="⬇️ הורד קובץ מוכן לפורטל", data=buffer.getvalue(),
-                                                       file_name=new_file_name,
-                                                       mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
-                            except ValueError as ve:
-                                if str(ve) == "SCANNED_PDF_BLOCKED":
-                                    st.error("🛑 **שגיאה: זוהה מסמך סרוק או תמונה.**")
-                                    st.warning(
-                                        "מערכת אטקה מקבלת קבצי Excel, CSV או PDF **דיגיטליים מקוריים בלבד** למניעת טעויות באספקה.")
+                                if total_orders == 1:
+                                    st.info("🎯 פוענחה הזמנה אחת מהמסמך. ניגש לעבודה...")
                                 else:
-                                    st.error(f"❌ שגיאה: {ve}")
-                            except Exception as e:
-                                st.error(f"❌ תקלה בלתי צפויה: {e}")
+                                    st.info(f"✂️ הקובץ פוצל ל-{total_orders} הזמנות שונות! מפענח אותן אחת-אחת...")
+
+                                    # --- יצירת "מקום שמור" לאזהרה שתשתנה בסיום ---
+                                    warning_placeholder = st.empty()
+                                    warning_placeholder.warning(
+                                        "⚠️ המערכת מעבדת מספר הזמנות ברצף. **נא לא ללחוץ על כפתורי ההורדה** עד לסיום מלא של כל הרשימה (כדי לא לעצור את התהליך)!")
+
+                                # שלב ב': ריצה על כל הזמנה בנפרד
+                                for i, order_dict in enumerate(split_orders):
+                                    order_name = order_dict["order_name"]
+                                    pdf_buffer = order_dict["pdf_obj"]
+
+                                    st.markdown(f"### 📦 מעבד: {order_name} ({i + 1}/{total_orders})")
+
+                                    with st.spinner(f"מפענח נתונים ב-AI עבור {order_name}..."):
+                                        items_list, returned_order_num = process_pdf(pdf_buffer, OPENAI_API_KEY)
+
+                                        final_order_name = f"Order_{returned_order_num}" if returned_order_num else order_name
+
+                                        excel_name = f"{final_order_name}.xlsx"
+                                        buffer, new_file_name, warnings, error = process_unified_data(items_list,
+                                                                                                      excel_name)
+
+                                        if error:
+                                            st.error(f"❌ שגיאה בהזמנה {final_order_name}: {error}")
+                                        elif buffer:
+                                            # חילוץ נתונים לשליחה בטלגרם
+                                            rows_count = len(items_list) if items_list else 0
+                                            warnings_count = len(warnings) if warnings else 0
+
+                                            send_telegram_message(final_order_name, rows_count, warnings_count)
+
+                                            st.success(f"✅ הזמנה {final_order_name} פוענחה בהצלחה!")
+
+                                            if warnings:
+                                                st.warning(
+                                                    f"⚠️ שימו לב: המערכת זיהתה **{len(warnings)}** שורות שדורשות את תשומת לבכם.\n\nאנא פתחו את הקובץ המצורף ובדקו את השורות המסומנות בכתום (הסבר מפורט ממתין לכם בעמודה C).")
+                                            else:
+                                                st.info("🎯 הקובץ תקין לחלוטין - לא נמצאו הערות מערכת.")
+
+                                            st.download_button(
+                                                label=f"⬇️ הורד קובץ מוכן ({final_order_name})",
+                                                data=buffer.getvalue(),
+                                                file_name=new_file_name,
+                                                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                                                key=f"dl_btn_{i}_{final_order_name}"
+                                            )
+
+                                    # שלב ג': השהיה למניעת עומס
+                                    if i < total_orders - 1:
+                                        with st.spinner("ממתין 20 שניות למניעת עומס על שרתי ה-AI..."):
+                                            time.sleep(20)
+
+                                # --- שלב ד': סיום הלולאה והחלפת האזהרה ---
+                                if total_orders > 1:
+                                    warning_placeholder.success(
+                                        "🎉 פענוח כל ההזמנות הסתיים! כעת ניתן להוריד את כל הקבצים בבטחה.")
+
+                        except ValueError as ve:
+                            if str(ve) == "SCANNED_PDF_BLOCKED":
+                                st.error("🛑 **שגיאה: זוהה מסמך סרוק או תמונה.**")
+                                st.warning(
+                                    "מערכת אטקה מקבלת קבצי Excel, CSV או PDF **דיגיטליים מקוריים בלבד** למניעת טעויות באספקה.")
+                            else:
+                                st.error(f"❌ שגיאה: {ve}")
+                        except Exception as e:
+                            st.error(f"❌ תקלה בלתי צפויה: {e}")
 
 # תחתית הדף
 st.write("")
