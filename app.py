@@ -77,7 +77,13 @@ if uploaded_file is not None:
                                 st.error(warning)
                             else:
                                 st.warning(warning)
-                st.success("✨ עיבוד הקובץ הסתיים בהצלחה!")
+                st.success("✅ הקובץ פוענח בהצלחה ומוכן להורדה!")
+
+                if warnings:
+                    st.warning(
+                        f"⚠️ שימו לב: המערכת זיהתה **{len(warnings)}** שורות שדורשות את תשומת לבכם.\n\nאנא פתחו את הקובץ המצורף ובדקו את השורות המסומנות בכתום (הסבר מפורט ממתין לכם בעמודה C).")
+                else:
+                    st.info("🎯 הקובץ תקין לחלוטין - לא נמצאו הערות מערכת.")
                 st.download_button(label="⬇️ הורד קובץ מוכן לפורטל", data=buffer.getvalue(), file_name=new_file_name,
                                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
 
@@ -113,17 +119,13 @@ if uploaded_file is not None:
                                     # הפעלת שליחת ההודעה לטלגרם
                                     send_telegram_alert(original_name, rows_count, warnings_count)
 
+                                    st.success("✅ הקובץ פוענח בהצלחה ומוכן להורדה!")
+
                                     if warnings:
-                                        with st.expander(f"הערות בקובץ - נמצאו {len(warnings)} הערות (לחצו לצפייה)",
-                                                         expanded=True):
-                                            for warning in warnings:
-                                                if "✅" in warning:
-                                                    st.success(warning)
-                                                elif "❌" in warning:
-                                                    st.error(warning)
-                                                else:
-                                                    st.warning(warning)
-                                    st.success("✨ המסמך פוענח בהצלחה!")
+                                        st.warning(
+                                            f"⚠️ שימו לב: המערכת זיהתה **{len(warnings)}** שורות שדורשות את תשומת לבכם.\n\nאנא פתחו את הקובץ המצורף ובדקו את השורות המסומנות בכתום (הסבר מפורט ממתין לכם בעמודה C).")
+                                    else:
+                                        st.info("🎯 הקובץ תקין לחלוטין - לא נמצאו הערות מערכת.")
                                     st.download_button(label="⬇️ הורד קובץ מוכן לפורטל", data=buffer.getvalue(),
                                                        file_name=new_file_name,
                                                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
