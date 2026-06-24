@@ -24,82 +24,43 @@ def process_pdf(pdf_file, openai_api_key):
     if not file_bytes:
         raise Exception("הקובץ שהועלה ריק.")
 
-    # מנוע קריאה מרחבי: שומר על העמודות והרווחים המדויקים של המסמך!
     pdf_bytes_io = io.BytesIO(file_bytes)
-    extracted_text = ""
+    # חילוץ טקסט גולמי בצורה ששומרת על מבנה הטבלה
     with pdfplumber.open(pdf_bytes_io) as pdf:
-        for page in pdf.pages:
-            text = page.extract_text(layout=True)
-            if text:
-                extracted_text += text + "\n"
+        extracted_text = "\n".join([page.extract_text(layout=True) for page in pdf.pages])
 
     client = OpenAI(api_key=openai_api_key)
-    messages = [
-        {
-            "role": "system",
-            "content": """אתה חולץ נתונים מתוך טבלאות של הזמנות רכש (B2B). 
-                הטקסט שמועבר אליך מסודר ויזואלית (שומר על רווחים), אך ייתכנו בו שבירות שורות וגלישת טקסט של תיאורי מוצרים.
 
-                חוקי ברזל למבנה הטבלה:
-                1. הגדרת שורה: שורת פריט מוגדרת אך ורק לפי קיומם של מק"ט ו/או כמות באותו קו אופקי. לא תמיד קיים מספר סידורי לשורה!
-                2. מניעת "שורות רפאים" (גלישת טקסט): אם יש שורת טקסט שמכילה רק המשך של תיאור (למשל "3X16A" או מידות) ללא כמות וללא מק"ט חוקי באותו קו אופקי, זהו טקסט שגלש! בשום אופן אל תיצור ממנו שורת פריט חדשה. התעלם ממנו או שייך אותו לתיאור של השורה מעל.
-                3. סינון מק"טים: חלץ את כל המק"טים האפשריים (אטקה, יצרן, פנימי, חלקי) רק משורות פריט אמיתיות.
-                4. חילוץ כמות: חלץ כמות כמספר שלם. אם בשורה אין כמות ברורה ששייכת אליה (למשל אם זה רק טקסט שגלש), החזר מחרוזת ריקה (""). לעולם אל תנחש כמות ואל תיקח כמות מהשורה שמעל או מתחת!
-                5. התעלמות מנתוני מנהלה: לעולם אל תחלץ נתונים מתוך מספרי הזמנה, מספרי דרישה (כגון מחרוזות המתחילות ב- PO או PD), או תנאי תשלום (כגון "שוטף + 120"). אלו אינם מק"טים וכמויות. התעלם מכל מידע שמופיע בתחתית העמוד באזורי ה"סה"כ" ו"תנאי תשלום"."""
-        },
-        {
-            "role": "user",
-            "content": f"להלן הטקסט מההזמנה (חלץ נתונים במדויק ושים לב לא ליצור שורות מיותרות מגלישת טקסט, והתעלם ממספרי דרישה/מנהלה):\n{extracted_text}"
-        }
-    ]
+    # הפרומפט החדש והקשוח
+    system_instruction = (
+        "אתה עוזר מומחה לחילוץ נתונים מהזמנות רכש של חברת 'אטקה'. "
+        "עליך לחלץ פריטים מתוך טבלת ההזמנה בלבד. "
+        "כללים קריטיים: \n"
+        "1. עמודת 'שורה' היא מספר סידורי בלבד. חלץ אותה לשדה row_number, אך לעולם אל תבלבל בינה לבין עמודת הכמות.\n"
+        "2. עמודת 'כמות' היא הכמות להזמנה. אם הכמות לא מופיעה במפורש בעמודת הכמות, או שיש ספק - אל תנחש! החזר מחרוזת ריקה.\n"
+        "3. אל תתייחס לנתונים בכותרת המסמך (כגון 'מספר ספק', 'תאריך', 'שם פרויקט'). התמקד רק בטבלה עצמה.\n"
+        "4. אם כמות מופיעה בצורה של '80.00' או '12.00', החזר אותה כמספר שלם ('80', '12').\n"
+        "5. בצע סריקה קפדנית: אם יש ערכים בעמודת הכמות בכל השורות (למשל '12' בכל השורות), וודא שאתה משייך את ה-'12' לכל פריט, ולא את מספר השורה."
+    )
 
-    response = client.beta.chat.completions.parse(
+    completion = client.beta.chat.completions.parse(
         model="gpt-4o",
-        messages=messages,
+        messages=[
+            {"role": "system", "content": system_instruction},
+            {"role": "user", "content": f"להלן תוכן ההזמנה, חלץ את הפריטים:\n{extracted_text}"}
+        ],
         response_format=PurchaseOrder,
     )
-    parsed_data = response.choices[0].message.parsed
 
-    ateka_set, vendor_to_ateka = load_catalog("PB.csv")
+    result = completion.choices[0].message.parsed
+
+    # המרה לפורמט הפנימי של המערכת
     items_list = []
-
-    for item in parsed_data.items:
-        chosen_sku = ""
-        is_exact_match = False
-
-        # ניקוי המק"טים שה-AI הביא
-        cleaned_candidates = [c.replace("*", "").replace("'", "").replace('"', "").strip() for c in item.skus_found]
-        valid_skus = [c for c in cleaned_candidates if c and c.count(' ') <= 1]
-
-        # שלב 1: חיפוש התאמה מלאה (אטקה)
-        for candidate in valid_skus:
-            clean_to_check = candidate.replace(" ", "").replace("-", "")
-            if clean_to_check in ateka_set or clean_to_check.lstrip('0') in ateka_set:
-                chosen_sku = candidate
-                is_exact_match = True
-                break
-
-        # שלב 2: חיפוש התאמה מלאה (יצרן)
-        if not is_exact_match:
-            for candidate in valid_skus:
-                clean_to_check = candidate.upper().replace(" ", "").replace("-", "")
-                if clean_to_check in vendor_to_ateka or clean_to_check.lstrip('0') in vendor_to_ateka:
-                    # כרגע שולחים מקט יצרן בלבד לאקסל
-                    #chosen_sku = vendor_to_ateka.get(clean_to_check) or vendor_to_ateka.get(clean_to_check.lstrip('0'))
-                    chosen_sku = candidate
-                    is_exact_match = True
-                    break
-
-        # שלב 3: חוסר התאמה מוחלט - העברת אחריות למשתמש
-        if not is_exact_match:
-            chosen_sku = max(valid_skus, key=len) if valid_skus else ""
-
-        # אם ה-AI החזיר כמות ריקה, ה-is_error יהפוך ל-True אוטומטית בהמשך התהליך ויצבע בכתום
+    for item in result.items:
         items_list.append({
             'row_num': item.row_number,
-            'sku': chosen_sku,
-            'qty': item.qty,
-            'is_error': not is_exact_match
+            'sku': item.skus_found[0] if item.skus_found else "",
+            'qty': item.qty
         })
 
-    return items_list, parsed_data.order_number
+    return items_list, result.order_number
