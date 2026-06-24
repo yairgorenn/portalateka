@@ -1,13 +1,13 @@
 import pandas as pd
 import io
 import os
-import streamlit as st
 from openpyxl.styles import Font, PatternFill, Alignment
+from functools import lru_cache
 
 SKU_LENGTH = 9
 
 
-@st.cache_data
+@lru_cache(maxsize=1)
 def load_catalog(csv_path="PB.csv"):
     """
     טוען את הקטלוג לזיכרון. רץ רק פעם אחת כשהשרת עולה (Cache).
