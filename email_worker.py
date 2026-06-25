@@ -18,7 +18,7 @@ EMAIL_ADDRESS = os.getenv("EMAIL_ADDRESS")  # האימייל של הבוט
 EMAIL_PASSWORD = os.getenv("EMAIL_PASSWORD")  # סיסמת ה-16 תווים של הבוט
 
 # דומיינים מורשים
-AUTHORIZED_DOMAINS = ["ateka.co.il", "afcon.co.il"]
+AUTHORIZED_DOMAINS = ["ateka.co.il", "afcon.co.il", "contel.co.il"]
 
 
 def decode_mime_header(s):
@@ -47,6 +47,7 @@ def send_reply_email(to_address, subject, text_body, attachments=None):
     """
     פונקציה ששולחת אימייל תגובה מיושר לימין (RTL) לאיש המכירות.
     attachments: רשימה של טאפלים במבנה: [(buffer, filename), ...]
+    תומכת בזיהוי אוטומטי של קבצי PDF ואקסל.
     """
     if not EMAIL_ADDRESS or not EMAIL_PASSWORD:
         print("❌ שגיאה: משתני הסביבה של המייל לא מוגדרים בשרת.")
@@ -64,19 +65,27 @@ def send_reply_email(to_address, subject, text_body, attachments=None):
     </div>
     """
 
-    # הגדרת התוכן (טקסט רגיל כגיבוי, ו-HTML כתוכן ראשי)
     msg.set_content(text_body)
     msg.add_alternative(html_body, subtype='html')
 
-    # הוספת הקבצים המצורפים (תומך כעת בקובץ בודד או בריבוי קבצים)
+    # הוספת הקבצים המצורפים תוך זיהוי סוג הקובץ (PDF או Excel)
     if attachments:
         for attr_buffer, attr_name in attachments:
             if attr_buffer and attr_name:
                 attachment_data = attr_buffer.getvalue()
+                file_ext = attr_name.split('.')[-1].lower() if '.' in attr_name else ''
+
+                if file_ext == 'pdf':
+                    maintype = 'application'
+                    subtype = 'pdf'
+                else:
+                    maintype = 'application'
+                    subtype = 'vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+
                 msg.add_attachment(
                     attachment_data,
-                    maintype='application',
-                    subtype='vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+                    maintype=maintype,
+                    subtype=subtype,
                     filename=attr_name
                 )
 
@@ -98,7 +107,6 @@ def check_and_process_emails():
         mail.login(EMAIL_ADDRESS, EMAIL_PASSWORD)
         mail.select("inbox")
 
-        # חיפוש מיילים שלא נקראו
         status, messages = mail.search(None, 'UNSEEN')
         if status != 'OK':
             return
@@ -156,7 +164,7 @@ def check_and_process_emails():
                     global_warnings_count = 0
 
                     try:
-                        # --- א) מסלול טיפול ב-PDF (כולל פיצול מובנה) ---
+                        # --- א) מסלול טיפול ב-PDF (כולל פיצול והצמדת המקור החתוך) ---
                         if file_ext == 'pdf':
                             print(f"📄 מנתח ומפצל קובץ PDF: {filename}...")
                             split_orders = split_pdf_to_orders(file_io)
@@ -179,28 +187,30 @@ def check_and_process_emails():
                                 if error:
                                     print(f"❌ שגיאה בעיבוד {final_order_name}: {error}")
                                 elif buffer:
+                                    # 1. הוספת קובץ האקסל המפוענח
                                     attachments_to_send.append((buffer, new_file_name))
+                                    # 2. הוספת קובץ ה-PDF המפוצל המקורי כנספח תואם!
+                                    attachments_to_send.append((pdf_chunk_buffer, f"{final_order_name}.pdf"))
+
                                     rows_count = len(items_list) if items_list else 0
                                     warnings_count = len(warnings) if warnings else 0
                                     global_warnings_count += warnings_count
 
-                                    # שליחת עדכון לטלגרם לכל תת-הזמנה בנפרד (כדי שתוכל לעקוב אחר ההתקדמות בלייב)
                                     send_telegram_message(final_order_name, rows_count, warnings_count)
 
-                                # השהיית קצב של 20 שניות בין קובץ לקובץ למניעת שגיאת Rate Limit 429 בשרת
                                 if i < total_orders - 1:
                                     print("⏳ ממתין 20 שניות למניעת עומס טוקנים...")
                                     time.sleep(20)
 
-                            # בניית אימייל סיכום מיושר לימין עם כל הקבצים המוכנים
                             if attachments_to_send:
                                 reply_body = (
-                                    f"שלום,\n\n"
-                                    f"קובץ ה-PDF המרוכז '{filename}' עובד ופוצל בהצלחה על ידי המערכת האוטומטית.\n"
-                                    f"המערכת חילקה את המסמך המקורי ל-{len(attachments_to_send)} קבצי הזמנות נפרדים המסודרים ומצורפים למייל זה.\n"
+                                    f"שלום מאיה,\n\n"
+                                    f"קובץ ה-PDF המרוכז '{filename}' עובד ופוצל בהצלחה.\n"
+                                    f"המערכת חילקה את המסמך המקורי ל-{total_orders} הזמנות שונות.\n"
+                                    f"לנוחיותך, לכל הזמנה צורף קובץ אקסל לטעינה מהירה וקובץ ה-PDF המקורי החתוך שלה כנספח למערכת.\n"
                                 )
                                 if global_warnings_count > 0:
-                                    reply_body += f"\n⚠️ שים לב: זוהו שורות שדורשות בדיקה מצידך בקבצים (מסומנות בכתום, פירוט מלא ממתין בעמודה C של כל קובץ).\n"
+                                    reply_body += f"\n⚠️ שים לב: זוהו שורות שדורשות בדיקה מצידך (מסומנות בכתום בעמודה C של קבצי האקסל).\n"
                                 else:
                                     reply_body += "\n🎯 כל קבצי האקסל נמצאו תקינים לחלוטין ומוכנים לעבודה.\n"
 
@@ -208,9 +218,9 @@ def check_and_process_emails():
 
                                 send_reply_email(sender_email, f"פיענוח קובץ הושלם: {total_orders} הזמנות מוכנות ✅",
                                                  reply_body, attachments_to_send)
-                                print(f"📧 מייל סיכום עם {len(attachments_to_send)} קבצים נשלח בהצלחה ל: {sender_email}")
+                                print(f"📧 מייל סיכום מועשר נשלח בהצלחה ל: {sender_email}")
 
-                        # --- ב) מסלול טיפול באקסל/CSV (מוסיף אפסים ומבצע הצלבות קטלוג) ---
+                        # --- ב) מסלול טיפול באקסל/CSV ---
                         else:
                             print(f"📊 מעבד קובץ אקסל/CSV: {filename}...")
                             buffer, new_file_name, warnings, error = process_excel(file_io, filename)
@@ -230,7 +240,7 @@ def check_and_process_emails():
                                 else:
                                     reply_body += "\n🎯 הקובץ נמצא תקין לחלוטין ללא הערות מיוחדות.\n"
 
-                                reply_body += "\nקובץ האקסל המעודכן (עם המק\"טים המיושרים) מוכן לטעינה ומצורף למייל זה.\n\nבברכה,\nמערכת אטקה"
+                                reply_body += "\nקובץ האקסל המעודכן מוכן לטעינה ומצורף למייל זה.\n\nבברכה,\nמערכת אטקה"
 
                                 send_reply_email(sender_email, f"אקסל מוכן: {new_file_name} ✅", reply_body,
                                                  [(buffer, new_file_name)])
@@ -249,7 +259,6 @@ def check_and_process_emails():
             if not file_found:
                 print(f"הודעה ללא קובץ תואם (PDF/Excel) מ- {sender_email}. מדלג.")
 
-            # סימון המייל כנקרא בסיום הטיפול
             mail.store(e_id, '+FLAGS', '\\Seen')
 
         mail.logout()
@@ -263,4 +272,4 @@ if __name__ == "__main__":
     print("ממתין להזמנות חדשות...")
     while True:
         check_and_process_emails()
-        time.sleep(15)  # בדיקה כל 15 שניות
+        time.sleep(15)
