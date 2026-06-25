@@ -36,144 +36,147 @@ def load_catalog(csv_path="PB.csv"):
 
 def process_unified_data(items_list, original_file_name):
     """
-    פונקציית הליבה המאוחדת!
-    מקבלת רשימת פריטים ממקור כלשהו (אקסל או AI) ומעבירה בשרשרת החיול.
+    מקבלת רשימת פריטים ומייצרת קובץ אקסל בעל שתי לשוניות:
+    1. העתקה לפריוריטי: מק"ט | ריק (רווח צר) | כמות | הערות
+    2. טעינה לפורטל: מבנה רגיל (מק"ט | כמות | הערות)
     """
-    ateka_set, vendor_to_ateka = load_catalog("PB.csv")
+    if not items_list:
+        return None, None, [], "❌ שגיאה: לא נמצאו פריטים תקינים לפענוח במסמך."
 
-    cleaned_skus = []
-    cleaned_qtys = []
-    row_notes = []  # רשימה חדשה לאיסוף ההערות לעמודה C
+    ateka_set, vendor_to_ateka = load_catalog()
+
+    priority_data = []
+    portal_data = []
     warnings = []
-    row_has_error = []
 
     for item in items_list:
-        row_num = item.get('row_num', '?')
-        orig_sku = item.get('sku', '')
-        orig_qty = item.get('qty', '')
-        is_error = item.get('is_error', False)
+        orig_sku = str(item.get('sku', '')).strip()
+        orig_qty = str(item.get('qty', '')).strip()
 
-        current_row_notes = []  # איסוף ההערות לשורה הספציפית הזו
+        # סינון שורות ריקות לחלוטין
+        if not orig_sku and not orig_qty:
+            continue
 
-        # --- א) לוגיקת מק"ט והצלבת קטלוג ---
-        if pd.isna(orig_sku) or str(orig_sku).strip() == "" or str(orig_sku).strip().lower() == 'nan':
-            sku_val = ""
-            msg = "מקט לא מלא (חסר ערך)"
-            current_row_notes.append(f"⚠️ {msg}")
-            warnings.append(f"⚠️ שורה {row_num}: שים לב - {msg}.")
-            is_error = True
-        else:
-            sku_str = str(orig_sku).strip()
-            if sku_str.endswith('.0'):
-                sku_str = sku_str[:-2]
+        clean_sku = orig_sku.upper().replace(" ", "").replace("-", "")
+        clean_qty = orig_qty
 
-            clean_sku = sku_str.replace(" ", "").replace("-", "")
-            X_upper = clean_sku.upper()
-            X_no_zeros = clean_sku.lstrip('0')
+        final_sku = orig_sku
+        status_note = ""
 
-            # 1. בדיקה אם זה מק"ט אטקה
-            if sku_str in ateka_set or X_no_zeros in ateka_set:
-                matched_ateka = sku_str if sku_str in ateka_set else X_no_zeros
-                if matched_ateka.lstrip('0') == '888888':
-                    sku_val = sku_str
-                    msg = "הפריט לא קיים במערכת (מקט 888888). הושאר מק\"ט מקורי"
-                    current_row_notes.append(f"❌ {msg}")
-                    warnings.append(f"❌ שורה {row_num}: {msg}.")
-                    is_error = True
-                else:
-                    sku_val = matched_ateka.zfill(SKU_LENGTH)
+        is_exact_match = False
+        is_vendor_match = False
 
-            # 2. בדיקה אם זה מק"ט יצרן
-            elif X_upper in vendor_to_ateka or X_upper.lstrip('0') in vendor_to_ateka:
-                matched_ateka = vendor_to_ateka.get(X_upper) or vendor_to_ateka.get(X_upper.lstrip('0'))
-                if matched_ateka.lstrip('0') == '888888':
-                    sku_val = sku_str
-                    msg = "הפריט לא קיים במערכת (מקט 888888). הושאר מק\"ט יצרן"
-                    current_row_notes.append(f"❌ {msg}")
-                    warnings.append(f"❌ שורה {row_num}: {msg}.")
-                    is_error = True
-                else:
-                    sku_val = matched_ateka.zfill(SKU_LENGTH)
-                    msg = "הומר ממק\"ט יצרן למק\"ט אטקה"
-                    current_row_notes.append(f"✅ {msg}")
-                    warnings.append(f"✅ שורה {row_num}: תקין - {msg} ({sku_val}).")
+        # 1. בדיקת התאמה מלאה לאטקה
+        if clean_sku in ateka_set:
+            final_sku = clean_sku
+            is_exact_match = True
+        elif clean_sku.lstrip('0') in ateka_set:
+            final_sku = clean_sku.lstrip('0').zfill(SKU_LENGTH)
+            is_exact_match = True
+            status_note = "✅ נוספו אפסים מובילים"
 
-            # 3. לא קיים בשום מקום
+        # 2. בדיקת התאמה לפי יצרן
+        if not is_exact_match:
+            if clean_sku in vendor_to_ateka:
+                final_sku = vendor_to_ateka[clean_sku]
+                is_vendor_match = True
+                status_note = "✅ הומר ממק\"ט יצרן למק\"ט אטקה"
+            elif clean_sku.lstrip('0') in vendor_to_ateka:
+                final_sku = vendor_to_ateka[clean_sku.lstrip('0')]
+                is_vendor_match = True
+                status_note = "✅ הומר ממק\"ט יצרן למק\"ט אטקה"
+
+        # 3. טיפול במק"ט לא מזוהה
+        if not is_exact_match and not is_vendor_match:
+            final_sku = orig_sku
+            if not final_sku:
+                status_note = "❌ חסר מק\"ט"
+                warnings.append(item)
             else:
-                sku_val = sku_str
-                msg = "מק\"ט לא מוכר במערכת – אנא בדוק"
-                current_row_notes.append(f"❌ {msg}")
-                warnings.append(f"❌ שורה {row_num}: {msg} ({sku_str}).")
-                is_error = True
+                status_note = "❌ מק\"ט לא מוכר במערכת – אנא בדוק"
+                warnings.append(item)
 
-        # --- ב) בדיקת כמות ---
-        qty_is_valid = False
-        qty_val = orig_qty
+        # 4. בדיקת כמות
+        if not clean_qty or not clean_qty.replace('.', '', 1).isdigit():
+            status_note += " | ⚠️ חסרה כמות תקינה"
+            if item not in warnings:
+                warnings.append(item)
 
-        if not pd.isna(orig_qty) and str(orig_qty).strip() != "":
-            try:
-                qty_float = float(orig_qty)
-                if qty_float.is_integer() and int(qty_float) > 0:
-                    qty_val = int(qty_float)
-                    qty_is_valid = True
-            except ValueError:
-                pass
+        # הרכבת הנתונים לגיליון פריוריטי
+        priority_data.append({
+            'מק"ט': final_sku,
+            'תיאור (רווח)': "",  # עמודה B נשארת ריקה
+            'כמות': clean_qty,
+            'הערות מערכת': status_note
+        })
 
-        if not qty_is_valid:
-            msg = "חסרה כמות תקינה"
-            current_row_notes.append(f"⚠️ {msg}")
-            warnings.append(f"⚠️ שורה {row_num}: שים לב - {msg}.")
-            is_error = True
-            if pd.isna(orig_qty) or str(orig_qty).strip() == "":
-                qty_val = ""
+        # הרכבת הנתונים לגיליון הפורטל הישן והמוכר
+        portal_data.append({
+            'מק"ט': final_sku,
+            'כמות': clean_qty,
+            'הערות מערכת': status_note
+        })
 
-        cleaned_skus.append(sku_val)
-        cleaned_qtys.append(qty_val)
-        row_has_error.append(is_error)
+    df_priority = pd.DataFrame(priority_data)
+    df_portal = pd.DataFrame(portal_data)
 
-        # חיבור כל ההערות של השורה למחרוזת אחת (למקרה שיש גם שגיאת מק"ט וגם כמות)
-        row_notes.append(" | ".join(current_row_notes))
-
-    # --- ג) יצירת האקסל עם עמודת ההערות החדשה ---
-    df_clean = pd.DataFrame({'מק"ט': cleaned_skus, 'כמות': cleaned_qtys, 'הערות מערכת': row_notes})
     buffer = io.BytesIO()
+
+    # יצירת קובץ אקסל רב-לשוניות
     with pd.ExcelWriter(buffer, engine='openpyxl') as writer:
-        df_clean.to_excel(writer, index=False)
+        df_priority.to_excel(writer, sheet_name='העתקה לפריוריטי', index=False)
+        df_portal.to_excel(writer, sheet_name='טעינה לפורטל', index=False)
+
         workbook = writer.book
-        worksheet = workbook.active
-        worksheet.views.sheetView[0].showGridLines = True
-        worksheet.sheet_properties.pageSetUpPr.fitToPage = True
-        worksheet.sheet_view.rightToLeft = True
+        fill_warning = PatternFill(start_color="FFFF99", end_color="FFFF99", fill_type="solid")
+        font_bold = Font(bold=True)
+        alignment_center = Alignment(horizontal='center', vertical='center')
+        alignment_right = Alignment(horizontal='right', vertical='center')
 
-        font_tahoma_regular = Font(name='Tahoma', size=14)
-        font_tahoma_header = Font(name='Tahoma', size=14, bold=True, color='FFFFFF')
+        # === עיצוב גיליון 1: העתקה לפריוריטי ===
+        ws_priority = workbook['העתקה לפריוריטי']
+        ws_priority.sheet_view.rightToLeft = True
 
-        # הגדרת הצבעים
-        fill_header = PatternFill(start_color='1F497D', end_color='1F497D', fill_type='solid')
-        fill_warning = PatternFill(start_color='FFD580', end_color='FFD580', fill_type='solid')
+        for cell in ws_priority[1]:
+            cell.font = font_bold
+            cell.alignment = alignment_center
 
-        center_align = Alignment(horizontal='center', vertical='center')
-
-        for row in worksheet.iter_rows():
+        for row in ws_priority.iter_rows(min_row=2, max_row=ws_priority.max_row, min_col=1, max_col=4):
             for cell in row:
-                cell.alignment = center_align
+                cell.alignment = alignment_right
 
-                if cell.row == 1:
-                    # שורת הכותרת (שורה 1)
-                    cell.font = font_tahoma_header
-                    cell.fill = fill_header
-                else:
-                    # שורות הנתונים
-                    cell.font = font_tahoma_regular
+            note_cell = row[3].value
+            if note_cell and ("❌" in str(note_cell) or "⚠️" in str(note_cell)):
+                for cell in row:
+                    cell.fill = fill_warning
 
-                    # בדיקה האם השורה הזו סומנה עם תקלה
-                    if row_has_error[cell.row - 2]:
-                        cell.fill = fill_warning  # צביעה בכתום
+        ws_priority.column_dimensions['A'].width = 20
+        ws_priority.column_dimensions['B'].width = 5  # רוחב צר מאוד לעמודה הריקה
+        ws_priority.column_dimensions['C'].width = 15
+        ws_priority.column_dimensions['D'].width = 50  # הערות נכנסו לעמודה D
 
-        worksheet.column_dimensions['A'].width = 20
-        worksheet.column_dimensions['B'].width = 15
-        worksheet.column_dimensions['C'].width = 50  # הוספת רוחב לעמודת ההערות החדשה
+        # === עיצוב גיליון 2: טעינה לפורטל ===
+        ws_portal = workbook['טעינה לפורטל']
+        ws_portal.sheet_view.rightToLeft = True
 
+        for cell in ws_portal[1]:
+            cell.font = font_bold
+            cell.alignment = alignment_center
+
+        for row in ws_portal.iter_rows(min_row=2, max_row=ws_portal.max_row, min_col=1, max_col=3):
+            for cell in row:
+                cell.alignment = alignment_right
+
+            note_cell = row[2].value
+            if note_cell and ("❌" in str(note_cell) or "⚠️" in str(note_cell)):
+                for cell in row:
+                    cell.fill = fill_warning
+
+        ws_portal.column_dimensions['A'].width = 20
+        ws_portal.column_dimensions['B'].width = 15
+        ws_portal.column_dimensions['C'].width = 50
+
+    buffer.seek(0)
     original_name, _ = os.path.splitext(original_file_name)
     new_file_name = f"{original_name}_מוכן_לפורטל.xlsx"
 
@@ -194,17 +197,15 @@ def process_excel(uploaded_file, original_file_name):
         if df.shape[1] < 2:
             return None, None, [], "❌ שגיאה: הקובץ חייב להכיל לפחות שתי עמודות (מק\"ט וכמות)."
 
-        # הפיכת ה-DataFrame לרשימה אחידה שהמוח (process_unified_data) יודע לקרוא
         items_list = []
-        for idx, row in df.iterrows():
+        for index, row in df.iterrows():
             items_list.append({
-                'row_num': idx + 2,
-                'sku': row[0],
-                'qty': row[1]
+                'row_num': index + 1,
+                'sku': str(row[0]),
+                'qty': str(row[1]) if pd.notna(row[1]) else ""
             })
 
-        # שליחה לפונקציה המרכזית
         return process_unified_data(items_list, original_file_name)
 
     except Exception as e:
-        return None, None, [], "שגיאה בעיבוד הקובץ. ודאו שהקובץ תקין ושיש בו נתונים החל מהשורה השנייה."
+        return None, None, [], f"❌ שגיאה בלתי צפויה: {e}"
