@@ -5,6 +5,9 @@ from openai import OpenAI
 from pydantic import BaseModel, Field
 from excel_handler import load_catalog
 
+# רשימת תחיליות שלקוחות מוסיפים בטעות וצריך לנקות (אפשר להוסיף לכאן עוד בהמשך)
+KNOWN_PREFIXES = ["AT-", "AT_", "AT", "A-"]
+
 
 class OrderRow(BaseModel):
     row_number: int = Field(description="מספר השורה")
@@ -38,7 +41,7 @@ def process_pdf(pdf_file, openai_api_key):
         "אתה מומחה לחילוץ נתונים מטבלאות הזמנות רכש מורכבות בעברית/אנגלית.\n"
         "חוקים קריטיים להצלחה:\n"
         "1. כמויות (qty): הכמות היא מספר. לעיתים קרובות מופיע לידה או מתחתיה הצירוף 'יח', 'יח.', 'יח'' או 'EA'. אם הכמות כתובה כ-'80.00' החזר '80'. אל תבלבל עם עמודת ה'שורה'!\n"
-        "2. מק\"טים (skus_found): חלץ את *כל* המחרוזות האלפנומריות בשורה שנראות כמו מק\"ט ספק או מק\"ט יצרן (למשל 1SDA0..., או 0025...). \n"
+        "2. מק\"טים (skus_found): חלץ את *כל* המחרוזות האלפנומריות בשורה שנראות כמו מק\"ט ספק או מק\"ט יצרן (למשל 1SDA0..., או 0025..., או AT-1217139). \n"
         "**אזהרה קריטית:** התעלם לחלוטין ממספרי פרויקט שמתחילים ב-PR (כמו PR26E00489) - הם אינם מק\"טים ואסור להכניס אותם לרשימה!\n"
         "3. אל תתייחס לנתונים בכותרת המסמך.\n"
         "4. **סריקת סיכומים:** התעלם לחלוטין משורות של 'סיכום כמויות', 'סה\"כ' או ממספר הספק (510050). אל תיצור עבורם שורות פיקטיביות!\n"
@@ -84,7 +87,35 @@ def process_pdf(pdf_file, openai_api_key):
                     is_exact_match = True
                     break
 
-        # שלב 3: חוסר התאמה מוחלט - ניקח את המחרוזת הארוכה ביותר (לרוב זה המק"ט האמיתי)
+        # שלב 3: הסרת תחיליות בעייתיות (כמו AT-) וחיפוש מחדש בקטלוג
+        if not is_exact_match:
+            for candidate in valid_skus:
+                clean_candidate = candidate.upper().strip()
+                removed_prefix = False
+
+                # בדיקה האם המק"ט מתחיל באחת התחיליות הבעייתיות
+                for prefix in KNOWN_PREFIXES:
+                    if clean_candidate.startswith(prefix):
+                        clean_candidate = clean_candidate[len(prefix):]  # חיתוך התחילית
+                        removed_prefix = True
+                        break
+
+                if removed_prefix:
+                    clean_to_check = clean_candidate.replace(" ", "").replace("-", "")
+
+                    # בדיקה מחדש מול קטלוג אטקה עם המספר הנקי
+                    if clean_to_check in ateka_set or clean_to_check.lstrip('0') in ateka_set:
+                        chosen_sku = clean_to_check  # העברת המספר הנקי כדי שבהמשך יתווספו לו אפסים!
+                        is_exact_match = True
+                        break
+
+                    # בדיקה מחדש מול קטלוג יצרן עם המספר הנקי
+                    if clean_to_check in vendor_to_ateka or clean_to_check.lstrip('0') in vendor_to_ateka:
+                        chosen_sku = clean_to_check
+                        is_exact_match = True
+                        break
+
+        # שלב 4: חוסר התאמה מוחלט - ניקח את המחרוזת הארוכה ביותר
         if not is_exact_match:
             chosen_sku = max(valid_skus, key=len) if valid_skus else ""
 
