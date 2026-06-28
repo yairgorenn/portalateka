@@ -81,6 +81,19 @@ def find_sku_in_db(search_sku):
         return None
 
 
+def ensure_catalog_db(csv_path="PB.csv"):
+    """
+    בודקת אם טבלת catalog קיימת ב-DB.
+    אם לא קיימת - טוענת את PB.csv ויוצרת אותה.
+    """
+    try:
+        with engine.connect() as conn:
+            conn.execute(text("SELECT 1 FROM catalog LIMIT 1"))
+        print("✅ טבלת catalog קיימת. אין צורך בטעינה מחדש.")
+    except Exception as e:
+        print(f"⚠️ טבלת catalog לא קיימת או לא נגישה. טוען מחדש מתוך {csv_path}...")
+        init_catalog_db(csv_path)
+
 if __name__ == "__main__":
     # הרצת בדיקה מקומית
     init_catalog_db("PB.csv")

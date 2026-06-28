@@ -2,6 +2,7 @@ import streamlit as st
 import os
 import time
 from pdf_router import split_pdf_to_orders
+from db_handler import ensure_catalog_db
 
 from excel_handler import process_excel, process_unified_data
 from pdf_handler import process_pdf
@@ -13,7 +14,7 @@ OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 # סיסמת הגישה שהגדרת לפענוח
 PDF_PASSWORD = "9876"
 
-
+ensure_catalog_db("PB.csv")
 st.set_page_config(page_title="חברת אטקה - מתקן קבצי הזמנה יאיר גורן", page_icon="⚙️", layout="centered")
 
 st.markdown("""
