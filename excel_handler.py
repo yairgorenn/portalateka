@@ -123,12 +123,15 @@ def process_unified_data(items_list, original_file_name):
     buffer = io.BytesIO()
 
     # יצירת קובץ אקסל רב-לשוניות
+    # יצירת קובץ אקסל רב-לשוניות
     with pd.ExcelWriter(buffer, engine='openpyxl') as writer:
         df_priority.to_excel(writer, sheet_name='העתקה לפריוריטי', index=False)
         df_portal.to_excel(writer, sheet_name='טעינה לפורטל', index=False)
 
         workbook = writer.book
         fill_warning = PatternFill(start_color="FFFF99", end_color="FFFF99", fill_type="solid")
+        fill_success = PatternFill(start_color="E6FFCC", end_color="E6FFCC",
+                                   fill_type="solid")  # ירוק בהיר לשורות תקינות
         font_bold = Font(bold=True)
         alignment_center = Alignment(horizontal='center', vertical='center')
         alignment_right = Alignment(horizontal='right', vertical='center')
@@ -149,6 +152,11 @@ def process_unified_data(items_list, original_file_name):
             if note_cell and ("❌" in str(note_cell) or "⚠️" in str(note_cell)):
                 for cell in row:
                     cell.fill = fill_warning
+            else:
+                # אם השורה תקינה, נצבע רק את עמודות A, B, C בירוק
+                row[0].fill = fill_success
+                row[1].fill = fill_success
+                row[2].fill = fill_success
 
         ws_priority.column_dimensions['A'].width = 20
         ws_priority.column_dimensions['B'].width = 5  # רוחב צר מאוד לעמודה הריקה

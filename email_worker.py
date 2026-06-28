@@ -214,6 +214,7 @@ def check_and_process_emails():
                                 else:
                                     reply_body += "\n🎯 כל קבצי האקסל נמצאו תקינים לחלוטין ומוכנים לעבודה.\n"
 
+                                reply_body += "\nסמן והעתק את העמודות המסומנות בירוק עמוד על שדה כמות בפיוריטי ולחץ CTRL+V\n"
                                 reply_body += "\nבברכה,\nמערכת הפענוח האוטומטית אטקה"
 
                                 send_reply_email(sender_email, f"פיענוח קובץ הושלם: {total_orders} הזמנות מוכנות ✅",
@@ -240,7 +241,9 @@ def check_and_process_emails():
                                 else:
                                     reply_body += "\n🎯 הקובץ נמצא תקין לחלוטין ללא הערות מיוחדות.\n"
 
-                                reply_body += "\nקובץ האקסל המעודכן מוכן לטעינה ומצורף למייל זה.\n\nבברכה,\nמערכת אטקה"
+                                reply_body += "\nקובץ האקסל המעודכן מוכן לטעינה ומצורף למייל זה.\n"
+                                reply_body += "סמן והעתק את העמודות המסומנות בירוק עמוד על שדה כמות בפיוריטי ולחץ CTRL+V\n"
+                                reply_body += "\nבברכה,\nמערכת אטקה"
 
                                 send_reply_email(sender_email, f"אקסל מוכן: {new_file_name} ✅", reply_body,
                                                  [(buffer, new_file_name)])
