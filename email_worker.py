@@ -59,9 +59,11 @@ def send_reply_email(to_address, subject, text_body, attachments=None):
     msg['To'] = to_address
 
     # הפיכת הטקסט ל-HTML תקני ומיושר לימין עבור קליינטים כמו אאוטלוק וג'ימייל
+    html_text = text_body.replace("\n", "<br>")
+
     html_body = f"""
     <div dir="rtl" style="text-align: right; font-family: Tahoma, Arial, sans-serif; font-size: 15px; line-height: 1.6; color: #333333;">
-        {text_body.replace('\n', '<br>')}
+        {html_text}
     </div>
     """
 
