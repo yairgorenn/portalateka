@@ -4,7 +4,75 @@ import os
 from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
 from db_handler import find_sku_in_db
 
+# =========================
+# הגדרות כלליות - קל לשינוי
+# =========================
 SKU_LENGTH = 9
+
+# שמות לשוניות
+PRIORITY_SHEET_NAME = 'העתקה לפריוריטי'
+PORTAL_SHEET_NAME = 'טעינה לפורטל'
+
+# עיצוב כללי
+EXCEL_FONT_NAME = 'Tahoma'
+EXCEL_FONT_SIZE = 14
+HEADER_FONT_SIZE = 14
+BODY_ROW_HEIGHT = 24
+HEADER_ROW_HEIGHT = 28
+ALIGNMENT_DATA = Alignment(horizontal='center', vertical='center')
+ALIGNMENT_HEADER = Alignment(horizontal='center', vertical='center')
+
+# צבעים
+WARNING_FILL_COLOR = 'FFFF99'   # צהוב בהיר לשורות בעייתיות
+SUCCESS_FILL_COLOR = 'E6FFCC'   # ירוק בהיר לשדות להעתקה
+HEADER_FILL_COLOR = 'D9EAF7'    # כחול בהיר לכותרות
+
+# רוחב עמודות - לשונית העתקה לפריוריטי
+PRIORITY_COL_WIDTHS = {
+    'A': 22,  # מק"ט
+    'B': 20,   # רווח
+    'C': 16,  # כמות
+    'D': 55,  # הערות מערכת
+}
+
+# רוחב עמודות - לשונית טעינה לפורטל
+PORTAL_COL_WIDTHS = {
+    'A': 22,  # מק"ט
+    'B': 16,  # כמות
+    'C': 55,  # הערות מערכת
+}
+
+
+def _excel_font(bold=False):
+    """יוצר פונט אחיד לכל הקובץ."""
+    return Font(name=EXCEL_FONT_NAME, size=EXCEL_FONT_SIZE, bold=bold)
+
+
+def _apply_column_widths(ws, widths):
+    """הגדרת רוחב עמודות לפי מילון."""
+    for col, width in widths.items():
+        ws.column_dimensions[col].width = width
+
+
+def _style_header_row(ws, max_col, border, header_fill):
+    """עיצוב שורת כותרות."""
+    ws.row_dimensions[1].height = HEADER_ROW_HEIGHT
+
+    for cell in ws[1][:max_col]:
+        cell.font = _excel_font(bold=True)
+        cell.fill = header_fill
+        cell.alignment = ALIGNMENT_HEADER
+        cell.border = border
+
+
+def _style_body_rows(ws, min_col, max_col, border):
+    """עיצוב בסיסי לכל שורות הנתונים."""
+    for row in ws.iter_rows(min_row=2, max_row=ws.max_row, min_col=min_col, max_col=max_col):
+        ws.row_dimensions[row[0].row].height = BODY_ROW_HEIGHT
+        for cell in row:
+            cell.font = _excel_font()
+            cell.alignment = ALIGNMENT_DATA
+            cell.border = border
 
 
 def process_unified_data(items_list, original_file_name):
@@ -58,7 +126,7 @@ def process_unified_data(items_list, original_file_name):
             'תיאור (רווח)': "",  # עמודה B נשארת ריקה
             'כמות': clean_qty,
             'הערות מערכת': status_note,
-            'is_valid': is_valid  # שדה עזר לעיצוב הצבעים (נסיר אותו לפני ההדפסה לאקסל)
+            'is_valid': is_valid  # שדה עזר לעיצוב הצבעים - מוסר לפני הכתיבה לאקסל
         })
 
         # === 4. הרכבת הנתונים לגיליון הפורטל ===
@@ -76,76 +144,62 @@ def process_unified_data(items_list, original_file_name):
     # יצירת קובץ אקסל רב-לשוניות
     with pd.ExcelWriter(buffer, engine='openpyxl') as writer:
         # מסירים את עמודת ה-is_valid מגיליון הפריוריטי לפני הכתיבה לקובץ
-        df_priority.drop(columns=['is_valid']).to_excel(writer, sheet_name='העתקה לפריוריטי', index=False)
-        df_portal.to_excel(writer, sheet_name='טעינה לפורטל', index=False)
+        df_priority.drop(columns=['is_valid']).to_excel(writer, sheet_name=PRIORITY_SHEET_NAME, index=False)
+        df_portal.to_excel(writer, sheet_name=PORTAL_SHEET_NAME, index=False)
 
         workbook = writer.book
-        fill_warning = PatternFill(start_color="FFFF99", end_color="FFFF99", fill_type="solid")
-        fill_success = PatternFill(start_color="E6FFCC", end_color="E6FFCC",
-                                   fill_type="solid")  # ירוק בהיר לשורות תקינות
-        font_bold = Font(bold=True)
-        alignment_center = Alignment(horizontal='center', vertical='center')
-        alignment_right = Alignment(horizontal='right', vertical='center')
+
+        fill_warning = PatternFill(start_color=WARNING_FILL_COLOR, end_color=WARNING_FILL_COLOR, fill_type='solid')
+        fill_success = PatternFill(start_color=SUCCESS_FILL_COLOR, end_color=SUCCESS_FILL_COLOR, fill_type='solid')
+        fill_header = PatternFill(start_color=HEADER_FILL_COLOR, end_color=HEADER_FILL_COLOR, fill_type='solid')
+
+        thin_border = Border(
+            left=Side(style='thin'),
+            right=Side(style='thin'),
+            top=Side(style='thin'),
+            bottom=Side(style='thin')
+        )
 
         # === עיצוב גיליון 1: העתקה לפריוריטי ===
-        ws_priority = workbook['העתקה לפריוריטי']
+        ws_priority = workbook[PRIORITY_SHEET_NAME]
         ws_priority.sheet_view.rightToLeft = True
+        ws_priority.freeze_panes = 'A2'
+        ws_priority.auto_filter.ref = ws_priority.dimensions
 
-        # הגדרת מסגרת דקה וסטנדרטית לכל תא
-        thin_border = Border(left=Side(style='thin'),
-                             right=Side(style='thin'),
-                             top=Side(style='thin'),
-                             bottom=Side(style='thin'))
+        _style_header_row(ws_priority, max_col=4, border=thin_border, header_fill=fill_header)
+        _style_body_rows(ws_priority, min_col=1, max_col=4, border=thin_border)
 
-        for cell in ws_priority[1]:
-            cell.font = font_bold
-            cell.alignment = alignment_center
-            cell.border = thin_border  # מסגרת לכותרות
-
-        # מעבר על כל השורות והוספת עיצוב ומסגרות
-        for row_idx, row in enumerate(
-                ws_priority.iter_rows(min_row=2, max_row=ws_priority.max_row, min_col=1, max_col=4)):
-            # שולפים את הסטטוס מהמילון כדי לדעת איזה צבע לשים
+        # צביעה לפי תקינות
+        for row_idx, row in enumerate(ws_priority.iter_rows(min_row=2, max_row=ws_priority.max_row, min_col=1, max_col=4)):
             current_is_valid = priority_data[row_idx]['is_valid']
-
-            for cell in row:
-                cell.alignment = alignment_right
-                cell.border = thin_border  # מסגרת לכל תא בטבלה
 
             if not current_is_valid:
                 for cell in row:
                     cell.fill = fill_warning
             else:
-                # אם השורה תקינה, נצבע רק את עמודות A, B, C בירוק
+                # אם השורה תקינה, נצבע רק את עמודות A, B, C בירוק - זה האזור שמעתיקים לפריוריטי
                 row[0].fill = fill_success
                 row[1].fill = fill_success
                 row[2].fill = fill_success
 
-        ws_priority.column_dimensions['A'].width = 20
-        ws_priority.column_dimensions['B'].width = 5
-        ws_priority.column_dimensions['C'].width = 15
-        ws_priority.column_dimensions['D'].width = 50  # תוקן מ-5 ל-50 כדי שיראו את ההערות
+        _apply_column_widths(ws_priority, PRIORITY_COL_WIDTHS)
 
         # === עיצוב גיליון 2: טעינה לפורטל ===
-        ws_portal = workbook['טעינה לפורטל']
+        ws_portal = workbook[PORTAL_SHEET_NAME]
         ws_portal.sheet_view.rightToLeft = True
+        ws_portal.freeze_panes = 'A2'
+        ws_portal.auto_filter.ref = ws_portal.dimensions
 
-        for cell in ws_portal[1]:
-            cell.font = font_bold
-            cell.alignment = alignment_center
+        _style_header_row(ws_portal, max_col=3, border=thin_border, header_fill=fill_header)
+        _style_body_rows(ws_portal, min_col=1, max_col=3, border=thin_border)
 
         for row in ws_portal.iter_rows(min_row=2, max_row=ws_portal.max_row, min_col=1, max_col=3):
-            for cell in row:
-                cell.alignment = alignment_right
-
             note_cell = row[2].value
             if note_cell and ("❌" in str(note_cell) or "⚠️" in str(note_cell)):
                 for cell in row:
                     cell.fill = fill_warning
 
-        ws_portal.column_dimensions['A'].width = 20
-        ws_portal.column_dimensions['B'].width = 15
-        ws_portal.column_dimensions['C'].width = 50
+        _apply_column_widths(ws_portal, PORTAL_COL_WIDTHS)
 
     buffer.seek(0)
     original_name, _ = os.path.splitext(original_file_name)
