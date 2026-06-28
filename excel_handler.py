@@ -2,36 +2,9 @@ import pandas as pd
 import io
 import os
 from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
-from functools import lru_cache
+from db_handler import find_sku_in_db
 
 SKU_LENGTH = 9
-
-
-@lru_cache(maxsize=1)
-def load_catalog(csv_path="PB.csv"):
-    """
-    טוען את הקטלוג לזיכרון. רץ רק פעם אחת כשהשרת עולה (Cache).
-    """
-    ateka_set = set()
-    vendor_to_ateka = {}
-
-    if not os.path.exists(csv_path):
-        return ateka_set, vendor_to_ateka
-
-    df = pd.read_csv(csv_path, header=None, dtype=str)
-    for _, row in df.iterrows():
-        ateka_sku = str(row[0]).strip()
-        vendor_sku = str(row[1]).replace(" ", "").replace("-", "").strip()
-
-        if ateka_sku != 'nan':
-            ateka_set.add(ateka_sku.lstrip('0'))
-            ateka_set.add(ateka_sku)
-
-        if vendor_sku != 'nan':
-            vendor_to_ateka[vendor_sku.upper()] = ateka_sku
-            vendor_to_ateka[vendor_sku.upper().lstrip('0')] = ateka_sku
-
-    return ateka_set, vendor_to_ateka
 
 
 def process_unified_data(items_list, original_file_name):
@@ -42,8 +15,6 @@ def process_unified_data(items_list, original_file_name):
     """
     if not items_list:
         return None, None, [], "❌ שגיאה: לא נמצאו פריטים תקינים לפענוח במסמך."
-
-    ateka_set, vendor_to_ateka = load_catalog()
 
     priority_data = []
     portal_data = []
@@ -62,55 +33,35 @@ def process_unified_data(items_list, original_file_name):
 
         final_sku = orig_sku
         status_note = ""
+        is_valid = True
 
-        is_exact_match = False
-        is_vendor_match = False
+        # === 1. חיפוש חכם במסד הנתונים ===
+        found_sku = find_sku_in_db(clean_sku)
 
-        # 1. בדיקת התאמה מלאה לאטקה
-        if clean_sku in ateka_set:
-            final_sku = clean_sku
-            is_exact_match = True
-        elif clean_sku.lstrip('0') in ateka_set:
-            final_sku = clean_sku.lstrip('0').zfill(SKU_LENGTH)
-            is_exact_match = True
-            status_note = "✅ נוספו אפסים מובילים"
+        if found_sku:
+            final_sku = str(found_sku).zfill(SKU_LENGTH)
+        else:
+            status_note = "❌ מק\"ט לא מוכר"
+            is_valid = False
+            warnings.append(item)
 
-        # 2. בדיקת התאמה לפי יצרן
-        if not is_exact_match:
-            if clean_sku in vendor_to_ateka:
-                final_sku = vendor_to_ateka[clean_sku]
-                is_vendor_match = True
-                status_note = "✅ הומר ממק\"ט יצרן למק\"ט אטקה"
-            elif clean_sku.lstrip('0') in vendor_to_ateka:
-                final_sku = vendor_to_ateka[clean_sku.lstrip('0')]
-                is_vendor_match = True
-                status_note = "✅ הומר ממק\"ט יצרן למק\"ט אטקה"
-
-        # 3. טיפול במק"ט לא מזוהה
-        if not is_exact_match and not is_vendor_match:
-            final_sku = orig_sku
-            if not final_sku:
-                status_note = "❌ חסר מק\"ט"
-                warnings.append(item)
-            else:
-                status_note = "❌ מק\"ט לא מוכר במערכת – אנא בדוק"
-                warnings.append(item)
-
-        # 4. בדיקת כמות
+        # === 2. בדיקת כמות ===
         if not clean_qty or not clean_qty.replace('.', '', 1).isdigit():
             status_note += " | ⚠️ חסרה כמות תקינה"
+            is_valid = False
             if item not in warnings:
                 warnings.append(item)
 
-        # הרכבת הנתונים לגיליון פריוריטי
+        # === 3. הרכבת הנתונים לגיליון פריוריטי ===
         priority_data.append({
             'מק"ט': final_sku,
             'תיאור (רווח)': "",  # עמודה B נשארת ריקה
             'כמות': clean_qty,
-            'הערות מערכת': status_note
+            'הערות מערכת': status_note,
+            'is_valid': is_valid  # שדה עזר לעיצוב הצבעים (נסיר אותו לפני ההדפסה לאקסל)
         })
 
-        # הרכבת הנתונים לגיליון הפורטל הישן והמוכר
+        # === 4. הרכבת הנתונים לגיליון הפורטל ===
         portal_data.append({
             'מק"ט': final_sku,
             'כמות': clean_qty,
@@ -123,9 +74,9 @@ def process_unified_data(items_list, original_file_name):
     buffer = io.BytesIO()
 
     # יצירת קובץ אקסל רב-לשוניות
-    # יצירת קובץ אקסל רב-לשוניות
     with pd.ExcelWriter(buffer, engine='openpyxl') as writer:
-        df_priority.to_excel(writer, sheet_name='העתקה לפריוריטי', index=False)
+        # מסירים את עמודת ה-is_valid מגיליון הפריוריטי לפני הכתיבה לקובץ
+        df_priority.drop(columns=['is_valid']).to_excel(writer, sheet_name='העתקה לפריוריטי', index=False)
         df_portal.to_excel(writer, sheet_name='טעינה לפורטל', index=False)
 
         workbook = writer.book
@@ -152,13 +103,16 @@ def process_unified_data(items_list, original_file_name):
             cell.border = thin_border  # מסגרת לכותרות
 
         # מעבר על כל השורות והוספת עיצוב ומסגרות
-        for row in ws_priority.iter_rows(min_row=2, max_row=ws_priority.max_row, min_col=1, max_col=4):
+        for row_idx, row in enumerate(
+                ws_priority.iter_rows(min_row=2, max_row=ws_priority.max_row, min_col=1, max_col=4)):
+            # שולפים את הסטטוס מהמילון כדי לדעת איזה צבע לשים
+            current_is_valid = priority_data[row_idx]['is_valid']
+
             for cell in row:
                 cell.alignment = alignment_right
                 cell.border = thin_border  # מסגרת לכל תא בטבלה
 
-            note_cell = row[3].value
-            if note_cell and ("❌" in str(note_cell) or "⚠️" in str(note_cell)):
+            if not current_is_valid:
                 for cell in row:
                     cell.fill = fill_warning
             else:
@@ -170,7 +124,7 @@ def process_unified_data(items_list, original_file_name):
         ws_priority.column_dimensions['A'].width = 20
         ws_priority.column_dimensions['B'].width = 5
         ws_priority.column_dimensions['C'].width = 15
-        ws_priority.column_dimensions['D'].width = 50
+        ws_priority.column_dimensions['D'].width = 50  # תוקן מ-5 ל-50 כדי שיראו את ההערות
 
         # === עיצוב גיליון 2: טעינה לפורטל ===
         ws_portal = workbook['טעינה לפורטל']

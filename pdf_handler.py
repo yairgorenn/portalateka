@@ -3,7 +3,7 @@ import io
 import re
 from openai import OpenAI
 from pydantic import BaseModel, Field
-from excel_handler import load_catalog
+from db_handler import find_sku_in_db  # ייבוא מנוע החיפוש מול ה-DB במקום הקובץ הישן
 
 # רשימת תחיליות שלקוחות מוסיפים בטעות וצריך לנקות (אפשר להוסיף לכאן עוד בהמשך)
 KNOWN_PREFIXES = ["AT-", "AT_", "AT", "A-"]
@@ -59,9 +59,6 @@ def process_pdf(pdf_file, openai_api_key):
 
     result = completion.choices[0].message.parsed
 
-    # טעינת הקטלוג לטובת סינון חכם בפייתון
-    ateka_set, vendor_to_ateka = load_catalog("PB.csv")
-
     items_list = []
     for item in result.items:
         # סינון נוסף בפייתון למקרה שה-AI טעה והכניס מספר פרויקט
@@ -70,52 +67,31 @@ def process_pdf(pdf_file, openai_api_key):
         chosen_sku = ""
         is_exact_match = False
 
-        # שלב 1: חיפוש התאמה מלאה (אטקה)
+        # מעבר על המק"טים שה-AI זיהה כדי למצוא אחד שאכן קיים במסד הנתונים
         for candidate in valid_skus:
-            clean_to_check = candidate.replace(" ", "").replace("-", "")
-            if clean_to_check in ateka_set or clean_to_check.lstrip('0') in ateka_set:
+            # 1. בדיקה ישירה מול מסד הנתונים
+            if find_sku_in_db(candidate):
                 chosen_sku = candidate
                 is_exact_match = True
                 break
 
-        # שלב 2: חיפוש התאמה מלאה (יצרן)
-        if not is_exact_match:
-            for candidate in valid_skus:
-                clean_to_check = candidate.upper().replace(" ", "").replace("-", "")
-                if clean_to_check in vendor_to_ateka or clean_to_check.lstrip('0') in vendor_to_ateka:
-                    chosen_sku = candidate
+            # 2. אם לא נמצא, ננסה להסיר תחיליות בעייתיות (כמו AT-) ולבדוק שוב
+            clean_candidate = candidate.upper().strip()
+            removed_prefix = False
+            for prefix in KNOWN_PREFIXES:
+                if clean_candidate.startswith(prefix):
+                    clean_candidate = clean_candidate[len(prefix):]  # חיתוך התחילית
+                    removed_prefix = True
+                    break
+
+            if removed_prefix:
+                # בדיקה מחדש מול מסד הנתונים ללא התחילית
+                if find_sku_in_db(clean_candidate):
+                    chosen_sku = clean_candidate  # שמירת המספר הנקי ללא הקידומת
                     is_exact_match = True
                     break
 
-        # שלב 3: הסרת תחיליות בעייתיות (כמו AT-) וחיפוש מחדש בקטלוג
-        if not is_exact_match:
-            for candidate in valid_skus:
-                clean_candidate = candidate.upper().strip()
-                removed_prefix = False
-
-                # בדיקה האם המק"ט מתחיל באחת התחיליות הבעייתיות
-                for prefix in KNOWN_PREFIXES:
-                    if clean_candidate.startswith(prefix):
-                        clean_candidate = clean_candidate[len(prefix):]  # חיתוך התחילית
-                        removed_prefix = True
-                        break
-
-                if removed_prefix:
-                    clean_to_check = clean_candidate.replace(" ", "").replace("-", "")
-
-                    # בדיקה מחדש מול קטלוג אטקה עם המספר הנקי
-                    if clean_to_check in ateka_set or clean_to_check.lstrip('0') in ateka_set:
-                        chosen_sku = clean_to_check  # העברת המספר הנקי כדי שבהמשך יתווספו לו אפסים!
-                        is_exact_match = True
-                        break
-
-                    # בדיקה מחדש מול קטלוג יצרן עם המספר הנקי
-                    if clean_to_check in vendor_to_ateka or clean_to_check.lstrip('0') in vendor_to_ateka:
-                        chosen_sku = clean_to_check
-                        is_exact_match = True
-                        break
-
-        # שלב 4: חוסר התאמה מוחלט - ניקח את המחרוזת הארוכה ביותר
+        # חוסר התאמה מוחלט - ניקח את המחרוזת הארוכה ביותר כדי שלמשתמש תהיה אינדיקציה כלשהי באקסל
         if not is_exact_match:
             chosen_sku = max(valid_skus, key=len) if valid_skus else ""
 
