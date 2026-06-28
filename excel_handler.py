@@ -41,7 +41,7 @@ def process_unified_data(items_list, original_file_name):
         if found_sku:
             final_sku = str(found_sku).zfill(SKU_LENGTH)
         else:
-            status_note = "❌ מק\"ט לא מוכר"
+            status_note = "❌ מק\"ט לא מוכר "
             is_valid = False
             warnings.append(item)
 
