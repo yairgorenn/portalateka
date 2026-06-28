@@ -1,7 +1,7 @@
 import pandas as pd
 import io
 import os
-from openpyxl.styles import Font, PatternFill, Alignment
+from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
 from functools import lru_cache
 
 SKU_LENGTH = 9
@@ -140,13 +140,22 @@ def process_unified_data(items_list, original_file_name):
         ws_priority = workbook['העתקה לפריוריטי']
         ws_priority.sheet_view.rightToLeft = True
 
+        # הגדרת מסגרת דקה וסטנדרטית לכל תא
+        thin_border = Border(left=Side(style='thin'),
+                             right=Side(style='thin'),
+                             top=Side(style='thin'),
+                             bottom=Side(style='thin'))
+
         for cell in ws_priority[1]:
             cell.font = font_bold
             cell.alignment = alignment_center
+            cell.border = thin_border  # מסגרת לכותרות
 
+        # מעבר על כל השורות והוספת עיצוב ומסגרות
         for row in ws_priority.iter_rows(min_row=2, max_row=ws_priority.max_row, min_col=1, max_col=4):
             for cell in row:
                 cell.alignment = alignment_right
+                cell.border = thin_border  # מסגרת לכל תא בטבלה
 
             note_cell = row[3].value
             if note_cell and ("❌" in str(note_cell) or "⚠️" in str(note_cell)):
@@ -159,9 +168,9 @@ def process_unified_data(items_list, original_file_name):
                 row[2].fill = fill_success
 
         ws_priority.column_dimensions['A'].width = 20
-        ws_priority.column_dimensions['B'].width = 5  # רוחב צר מאוד לעמודה הריקה
+        ws_priority.column_dimensions['B'].width = 5
         ws_priority.column_dimensions['C'].width = 15
-        ws_priority.column_dimensions['D'].width = 50  # הערות נכנסו לעמודה D
+        ws_priority.column_dimensions['D'].width = 50
 
         # === עיצוב גיליון 2: טעינה לפורטל ===
         ws_portal = workbook['טעינה לפורטל']
