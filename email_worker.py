@@ -18,7 +18,7 @@ EMAIL_ADDRESS = os.getenv("EMAIL_ADDRESS")  # האימייל של הבוט
 EMAIL_PASSWORD = os.getenv("EMAIL_PASSWORD")  # סיסמת ה-16 תווים של הבוט
 
 # דומיינים מורשים
-AUTHORIZED_DOMAINS = ["ateka.co.il", "afcon.co.il", "contel.co.il"]
+AUTHORIZED_DOMAINS = ["ateka.co.il", "afcon.co.il"]
 
 
 def decode_mime_header(s):
