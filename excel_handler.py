@@ -1,6 +1,8 @@
 import pandas as pd
 import io
 import os
+import re
+from decimal import Decimal, InvalidOperation
 from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
 from db_handler import find_sku_in_db
 
@@ -26,6 +28,10 @@ ALIGNMENT_HEADER = Alignment(horizontal='center', vertical='center')
 WARNING_FILL_COLOR = 'FFFF99'   # צהוב בהיר לשורות בעייתיות
 SUCCESS_FILL_COLOR = 'E6FFCC'   # ירוק בהיר לשדות להעתקה
 HEADER_FILL_COLOR = 'D9EAF7'    # כחול בהיר לכותרות
+
+# פורמט כמויות
+# הכמויות נשמרות כטקסט כדי למנוע מאקסל להציג 9 בתור 9.0 או לשנות פורמט בהדבקה
+EXCEL_TEXT_FORMAT = '@'
 
 # רוחב עמודות - לשונית העתקה לפריוריטי
 PRIORITY_COL_WIDTHS = {
@@ -75,6 +81,55 @@ def _style_body_rows(ws, min_col, max_col, border):
             cell.border = border
 
 
+def _normalize_quantity(raw_qty):
+    """
+    מנרמלת כמות לפורמט שלם ונקי להדבקה לפריוריטי.
+
+    חוקים:
+    - כמות שלמה נשמרת ללא נקודה עשרונית: 9, 9.0, 9.00 -> '9'
+    - כמות עשרונית אמיתית נשארת כפי שהגיעה: 9.3 -> '9.3', אבל מסומנת כלא תקינה
+    - ערך ריק / טקסט לא מספרי נשאר כפי שהוא ומסומן כלא תקין
+    """
+    if raw_qty is None:
+        return "", False
+
+    qty_text = str(raw_qty).strip()
+
+    if not qty_text or qty_text.lower() in {"nan", "none", "null"}:
+        return "", False
+
+    # אם יש פסיקים של אלפים בלבד, למשל 1,000 או 12,000 - נסיר אותם.
+    # אם זה משהו אחר כמו 9,3, נשאיר כמו שהוא ונגדיר כלא תקין.
+    qty_for_check = qty_text
+    if "," in qty_for_check:
+        if re.fullmatch(r"\d{1,3}(,\d{3})+(\.\d+)?", qty_for_check):
+            qty_for_check = qty_for_check.replace(",", "")
+        else:
+            return qty_text, False
+
+    try:
+        qty_decimal = Decimal(qty_for_check)
+    except InvalidOperation:
+        return qty_text, False
+
+    # כמות שלילית לא אמורה להיכנס להזמנת לקוח רגילה
+    if qty_decimal < 0:
+        return qty_text, False
+
+    # כמות שלמה - מחזירים בלי נקודה עשרונית
+    if qty_decimal == qty_decimal.to_integral_value():
+        return str(int(qty_decimal)), True
+
+    # כמות עשרונית אמיתית - משאירים את הערך המקורי אבל מסמנים כשגיאה
+    return qty_text, False
+
+
+def _set_text_format(ws, cells):
+    """הגדרת תאים כטקסט כדי לשמור על הערך כמו שהוא מוצג."""
+    for cell_ref in cells:
+        ws[cell_ref].number_format = EXCEL_TEXT_FORMAT
+
+
 def process_unified_data(items_list, original_file_name):
     """
     מקבלת רשימת פריטים ומייצרת קובץ אקסל בעל שתי לשוניות:
@@ -97,7 +152,7 @@ def process_unified_data(items_list, original_file_name):
             continue
 
         clean_sku = orig_sku.upper().replace(" ", "").replace("-", "")
-        clean_qty = orig_qty
+        clean_qty, is_qty_valid = _normalize_quantity(orig_qty)
 
         final_sku = orig_sku
         status_note = ""
@@ -114,8 +169,8 @@ def process_unified_data(items_list, original_file_name):
             warnings.append(item)
 
         # === 2. בדיקת כמות ===
-        if not clean_qty or not clean_qty.replace('.', '', 1).isdigit():
-            status_note += " | ⚠️ חסרה כמות תקינה"
+        if not is_qty_valid:
+            status_note += " | ⚠️ כמות לא תקינה"
             is_valid = False
             if item not in warnings:
                 warnings.append(item)
@@ -169,9 +224,13 @@ def process_unified_data(items_list, original_file_name):
         _style_header_row(ws_priority, max_col=4, border=thin_border, header_fill=fill_header)
         _style_body_rows(ws_priority, min_col=1, max_col=4, border=thin_border)
 
-        # צביעה לפי תקינות
+        # צביעה לפי תקינות ושמירת פורמט טקסט למק"ט וכמות
         for row_idx, row in enumerate(ws_priority.iter_rows(min_row=2, max_row=ws_priority.max_row, min_col=1, max_col=4)):
             current_is_valid = priority_data[row_idx]['is_valid']
+
+            # A = מק"ט, C = כמות. נשמרים כטקסט כדי למנוע שינויי פורמט של Excel.
+            row[0].number_format = EXCEL_TEXT_FORMAT
+            row[2].number_format = EXCEL_TEXT_FORMAT
 
             if not current_is_valid:
                 for cell in row:
@@ -194,6 +253,10 @@ def process_unified_data(items_list, original_file_name):
         _style_body_rows(ws_portal, min_col=1, max_col=3, border=thin_border)
 
         for row in ws_portal.iter_rows(min_row=2, max_row=ws_portal.max_row, min_col=1, max_col=3):
+            # A = מק"ט, B = כמות. נשמרים כטקסט כדי למנוע שינויי פורמט של Excel.
+            row[0].number_format = EXCEL_TEXT_FORMAT
+            row[1].number_format = EXCEL_TEXT_FORMAT
+
             note_cell = row[2].value
             if note_cell and ("❌" in str(note_cell) or "⚠️" in str(note_cell)):
                 for cell in row:
