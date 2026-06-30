@@ -83,7 +83,13 @@ class OrderRow(BaseModel):
 
 
 class PurchaseOrder(BaseModel):
-    order_number: str = Field(description="מספר הזמנת הרכש")
+    order_number: str = Field(
+        description=(
+            "מספר הזמנת הרכש בלבד. "
+            "יש לחלץ רק מספר שמופיע ליד הביטוי 'הזמנת רכש', 'הזמנת רכש מספר', 'מספר הזמנה', 'Purchase Order' או PO. "
+            "אין לחלץ מזהה, מפתח, אסמכתא, מחסן, סוכן, מספר דרישה או מספר לקוח."
+        )
+    )
     items: list[OrderRow]
 
 
@@ -305,6 +311,9 @@ def process_pdf(pdf_file, openai_api_key):
         "6. שורות אספקה/הובלה/משלוח/delivery/shipping/freight: אם אין מקט מודפס בשורה, החזר skus_found=[] והשאר רק את הכמות אם קיימת.\n"
         "7. אל תבלבל בין עמודת שורה לבין כמות.\n"
         "8. אם יש ספק - החזר פחות מידע, לא יותר. עדיף skus_found=[] מאשר מקט שגוי.\n"
+        "9. מספר הזמנה order_number: החזר אך ורק את המספר שמופיע ליד הביטוי 'הזמנת רכש', 'הזמנת רכש מספר', 'מספר הזמנה', 'Purchase Order' או PO. "
+        "אל תחזיר מספרים שמופיעים ליד המילים 'מזהה', 'מפתח', 'אסמכתא', 'מחסן', 'סוכן', 'דרישה', 'לקוח' או 'חשבונית'. "
+        "במקרה של המסמך 'הזמנת רכש 38793' יש להחזיר 38793 ולא את המזהה."
     )
 
     completion = client.beta.chat.completions.parse(
