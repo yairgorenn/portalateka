@@ -52,6 +52,13 @@ def init_catalog_db(csv_path="PB.csv"):
 def find_sku_in_db(search_sku):
     """
     מקבלת מק"ט, מחפשת במסד הנתונים, ומחזירה את מק"ט אטקה התקין.
+
+    סדר החיפוש:
+    1. מק"ט כמו שהתקבל
+    2. מק"ט בלי אפסים מובילים
+    3. מק"ט אטקה עם השלמה ל-9 ספרות
+    4. כלל אוריאל שי לווידמולר:
+       800101000 -> 1010000000
     """
     if search_sku is None:
         return None
@@ -62,7 +69,6 @@ def find_sku_in_db(search_sku):
     if not clean_sku:
         return None
 
-    # אופציונלי אבל מומלץ: למנוע חיפושים לא רציניים
     if len(clean_sku) < 3:
         return None
 
@@ -70,18 +76,17 @@ def find_sku_in_db(search_sku):
     padded_sku = clean_sku.zfill(9)
 
     query = text("""
-        SELECT ateka_sku 
-        FROM catalog 
-        WHERE 
+        SELECT DISTINCT ateka_sku
+        FROM catalog
+        WHERE
             (
-                vendor_sku <> '' 
+                vendor_sku <> ''
                 AND (
-                    vendor_sku = :clean_sku 
+                    vendor_sku = :clean_sku
                     OR vendor_sku = :stripped_sku
                 )
             )
             OR ateka_sku = :padded_sku
-        LIMIT 1
     """)
 
     with engine.connect() as conn:
@@ -89,13 +94,43 @@ def find_sku_in_db(search_sku):
             "clean_sku": clean_sku,
             "stripped_sku": stripped_sku,
             "padded_sku": padded_sku
-        }).fetchone()
+        }).fetchall()
 
-        if result:
-            return result[0]
+        # אם נמצאה התאמה יחידה - מחזירים אותה
+        if len(result) == 1:
+            return result[0][0]
+
+        # אם נמצאו כמה מק"טי אטקה שונים - לא בוחרים אוטומטית
+        if len(result) > 1:
+            print(f"⚠️ נמצאו מספר התאמות עבור {clean_sku}: {[row[0] for row in result]}")
+            return None
+
+        # === כלל אוריאל שי / ויידמולר ===
+        # דוגמה:
+        # 800101000 -> הסרת 800 -> 101000 -> הוספת 0000 -> 1010000000
+        if clean_sku.startswith("800") and clean_sku.isdigit() and len(clean_sku) == 9:
+            weidmuller_sku = clean_sku[3:] + "0000"
+
+            weidmuller_query = text("""
+                SELECT DISTINCT ateka_sku
+                FROM catalog
+                WHERE vendor_sku <> ''
+                  AND vendor_sku = :weidmuller_sku
+            """)
+
+            weidmuller_result = conn.execute(weidmuller_query, {
+                "weidmuller_sku": weidmuller_sku
+            }).fetchall()
+
+            if len(weidmuller_result) == 1:
+                print(f"✅ התאמת אוריאל שי/ויידמולר: {clean_sku} -> {weidmuller_sku} -> {weidmuller_result[0][0]}")
+                return weidmuller_result[0][0]
+
+            if len(weidmuller_result) > 1:
+                print(f"⚠️ נמצאו מספר התאמות ויידמולר עבור {clean_sku} -> {weidmuller_sku}: {[row[0] for row in weidmuller_result]}")
+                return None
 
         return None
-
 
 def ensure_catalog_db(csv_path="PB.csv"):
     """

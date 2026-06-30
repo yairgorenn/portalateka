@@ -175,7 +175,8 @@ def _is_plausible_sku(candidate):
 
     # אם זה מספר בלבד, נאפשר כרגע רק 7 או 9 ספרות
     # 7 = מקט ספק נפוץ, 9 = מקט אטקה עם אפסים מובילים
-    if s.isdigit() and len(s) not in (7, 9):
+    # 10 weidmueller
+    if s.isdigit() and len(s) not in (7, 9, 10):
         return False
 
     return True
