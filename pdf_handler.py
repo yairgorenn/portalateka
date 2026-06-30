@@ -64,7 +64,19 @@ def process_pdf(pdf_file, openai_api_key):
     items_list = []
     for item in result.items:
         # סינון נוסף בפייתון למקרה שה-AI טעה והכניס מספר פרויקט
-        valid_skus = [s for s in item.skus_found if s and not s.upper().startswith("PR")]
+        valid_skus = []
+        if item.skus_found:
+            for s in item.skus_found:
+                if s and not s.upper().startswith("PR"):
+                    # מנקים רווחים ומקפים כדי לבדוק בצורה חלקה
+                    clean_s = s.replace(" ", "").replace("-", "")
+                    clean_text = extracted_text.replace(" ", "").replace("-", "")
+
+                    # בדיקה קריטית: האם המספר שה-AI מצא באמת מופיע בטקסט של המסמך?
+                    if clean_s in clean_text:
+                        valid_skus.append(s)
+                    else:
+                        print(f"🚫 המערכת חסמה מק\"ט שה-AI המציא (Hallucination): {s}")
 
         chosen_sku = ""
         is_exact_match = False
