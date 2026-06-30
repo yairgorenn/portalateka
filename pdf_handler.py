@@ -14,6 +14,7 @@ class OrderRow(BaseModel):
     product_description: str = Field(description="תיאור המוצר המלא.")
     skus_found: list[str] = Field(
         description="רשימת כל המחרוזות בשורה שנראות כמו מק\"ט. חובה לחלץ אך ורק מהטקסט! אם אין מק\"ט בשורה (למשל שורת הובלה/אספקה), החזר רשימה ריקה []. לעולם אל תמציא!"
+    )
     qty: str = Field(
         description="הכמות המוזמנת. חפש מספרים שמופיעה לידם המילה 'יח', 'יח.', או 'יח''."
     )
