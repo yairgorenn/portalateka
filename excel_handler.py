@@ -159,7 +159,7 @@ def process_unified_data(items_list, original_file_name):
         is_valid = True
 
         # === 1. חיפוש חכם במסד הנתונים ===
-        found_sku = find_sku_in_db(clean_sku)
+        found_sku = find_sku_in_db(clean_sku) if clean_sku else None
 
         if found_sku:
             final_sku = str(found_sku).zfill(SKU_LENGTH)

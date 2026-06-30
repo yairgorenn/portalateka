@@ -51,21 +51,36 @@ def init_catalog_db(csv_path="PB.csv"):
 
 def find_sku_in_db(search_sku):
     """
-    מקבלת מק"ט, מחפשת במסד הנתונים, ומחזירה את מק"ט אטקה התקין (עם אפסים).
+    מקבלת מק"ט, מחפשת במסד הנתונים, ומחזירה את מק"ט אטקה התקין.
     """
-    clean_sku = str(search_sku).replace(" ", "").replace("-", "").upper()
+    if search_sku is None:
+        return None
 
-    # מכינים את 3 התרחישים לחיפוש:
-    stripped_sku = clean_sku.lstrip('0')  # למקרה שמק"ט יצרן הוקלד בלי אפסים
-    padded_sku = clean_sku.zfill(9)  # למקרה שזה מק"ט אטקה שהוקלד בלי אפסים
+    clean_sku = str(search_sku).replace(" ", "").replace("-", "").upper().strip()
 
-    # אנחנו מחפשים התאמה למק"ט יצרן (עם או בלי אפסים) או למק"ט אטקה המושלם
+    # חסימת ברזל: לא מחפשים מק"ט ריק או קצר מדי
+    if not clean_sku:
+        return None
+
+    # אופציונלי אבל מומלץ: למנוע חיפושים לא רציניים
+    if len(clean_sku) < 3:
+        return None
+
+    stripped_sku = clean_sku.lstrip('0')
+    padded_sku = clean_sku.zfill(9)
+
     query = text("""
         SELECT ateka_sku 
         FROM catalog 
-        WHERE vendor_sku = :clean_sku 
-           OR vendor_sku = :stripped_sku
-           OR ateka_sku = :padded_sku
+        WHERE 
+            (
+                vendor_sku <> '' 
+                AND (
+                    vendor_sku = :clean_sku 
+                    OR vendor_sku = :stripped_sku
+                )
+            )
+            OR ateka_sku = :padded_sku
         LIMIT 1
     """)
 
@@ -77,7 +92,8 @@ def find_sku_in_db(search_sku):
         }).fetchone()
 
         if result:
-            return result[0]  # יחזיר אוטומטית מק"ט של 9 ספרות כי ככה שמרנו ב-DB
+            return result[0]
+
         return None
 
 
