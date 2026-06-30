@@ -3,26 +3,220 @@ import io
 import re
 from openai import OpenAI
 from pydantic import BaseModel, Field
-from db_handler import find_sku_in_db  # ייבוא מנוע החיפוש מול ה-DB במקום הקובץ הישן
+from db_handler import find_sku_in_db
 
-# רשימת תחיליות שלקוחות מוסיפים בטעות וצריך לנקות (אפשר להוסיף לכאן עוד בהמשך)
+# =========================
+# הגדרות כלליות - קל לשינוי
+# =========================
+
+# תחיליות שלקוחות מוסיפים בטעות לפני מק"ט אטקה/יצרן
 KNOWN_PREFIXES = ["AT-", "AT_", "AT", "A-"]
+
+# מילים שמאפיינות שורת שירות / הובלה / אספקה ולא שורת מוצר רגילה
+LOGISTICS_KEYWORDS = [
+    "אספקה",
+    "הובלה",
+    "משלוח",
+    "דמי משלוח",
+    "תעודת משלוח",
+    "delivery",
+    "shipping",
+    "freight",
+    "transport",
+]
+
+# ערכים ידועים שאסור להפוך למק"ט גם אם הופיעו במסמך
+BLOCKED_SKUS = {
+    "510050",  # מספר ספק ידוע
+}
+
+# טקסטים / תבניות רעש שאינם שורות פריט
+SUMMARY_KEYWORDS = [
+    "סה\"כ",
+    "סהכ",
+    "מחיר כולל",
+    "מע\"מ",
+    "מעמ",
+    "תנאי תשלום",
+    "מס' ספק",
+    "מספר ספק",
+    "הזמנת לקוח",
+    "מהדורה נוכחית",
+]
 
 
 class OrderRow(BaseModel):
-    row_number: int = Field(description="מספר השורה")
-    product_description: str = Field(description="תיאור המוצר המלא.")
+    row_number: int = Field(description="מספר השורה בטבלת ההזמנה")
+    product_description: str = Field(description="תיאור המוצר המלא כפי שמופיע בשורת ההזמנה")
     skus_found: list[str] = Field(
-        description="רשימת כל המחרוזות בשורה שנראות כמו מק\"ט. חובה לחלץ אך ורק מהטקסט! אם אין מק\"ט בשורה (למשל שורת הובלה/אספקה), החזר רשימה ריקה []. לעולם אל תמציא!"
+        description=(
+            "רשימת מקטים שמופיעים פיזית בשורת הפריט בלבד. "
+            "אסור להמציא, להשלים, לנחש או להסיק מקט לפי תיאור. "
+            "אם אין מקט מודפס בשורה, החזר רשימה ריקה []. "
+            "בשורות אספקה/הובלה/משלוח החזר תמיד [] אם אין מקט מודפס ברור."
+        )
     )
     qty: str = Field(
-        description="הכמות המוזמנת. חפש מספרים שמופיעה לידם המילה 'יח', 'יח.', או 'יח''."
+        description=(
+            "הכמות המוזמנת. חפש מספר שמופיע לידו או תחתיו יח, יח', יח. או EA. "
+            "אם הכמות כתובה כ-80.00 החזר 80. אם חסרה כמות החזר מחרוזת ריקה."
+        )
     )
 
 
 class PurchaseOrder(BaseModel):
-    order_number: str = Field(description="מספר הזמנה")
+    order_number: str = Field(description="מספר הזמנת הרכש")
     items: list[OrderRow]
+
+
+def _normalize_sku(value):
+    """
+    ניקוי בסיסי למקט: הסרת רווחים/מקפים/קו תחתון והמרה לאותיות גדולות.
+    לא מוסיף אפסים ולא משנה משמעות עסקית.
+    """
+    if value is None:
+        return ""
+    return (
+        str(value)
+        .strip()
+        .replace(" ", "")
+        .replace("-", "")
+        .replace("_", "")
+        .upper()
+    )
+
+
+def _clean_quantity(raw_qty):
+    """
+    ניקוי כמות בלבד. לא מחליט כאן אם הכמות תקינה לטעינה - זה נשאר באקסל.
+    """
+    clean_qty = str(raw_qty or "").strip()
+
+    if clean_qty:
+        clean_qty = re.sub(r"[^\d.]", "", clean_qty)
+        if clean_qty.endswith("."):
+            clean_qty = clean_qty[:-1]
+
+        try:
+            # 80.00 -> 80
+            # 1.000 -> 1
+            clean_qty = str(int(float(clean_qty)))
+        except ValueError:
+            clean_qty = ""
+
+    return clean_qty
+
+
+def _is_summary_or_noise_line(text):
+    """בודקת אם השורה היא סיכום/מע״מ/תנאי תשלום ולא שורת פריט."""
+    if not text:
+        return False
+
+    text_lower = str(text).lower()
+    return any(keyword.lower() in text_lower for keyword in SUMMARY_KEYWORDS)
+
+
+def _is_logistics_or_service_line(text):
+    """בודקת אם מדובר בשורת אספקה/הובלה/משלוח ולא בשורת מוצר רגילה."""
+    if not text:
+        return False
+
+    text_lower = str(text).lower()
+    return any(keyword.lower() in text_lower for keyword in LOGISTICS_KEYWORDS)
+
+
+def _is_plausible_sku(candidate):
+    """
+    סינון ראשוני למחרוזות שנראות כמו מקט.
+    לא מחליף בדיקת DB ולא מחליף בדיקת הופעה במסמך.
+    """
+    if not candidate:
+        return False
+
+    s = _normalize_sku(candidate)
+
+    if not s:
+        return False
+
+    if s in BLOCKED_SKUS:
+        return False
+
+    if s.startswith("PR"):
+        return False
+
+    # לא לקבל מספרים קצרים, אחוזים, מחירים או כמויות כמקט
+    if len(s) < 5:
+        return False
+
+    # אם זה מספר בלבד, נאפשר כרגע רק 7 או 9 ספרות
+    # 7 = מקט ספק נפוץ, 9 = מקט אטקה עם אפסים מובילים
+    if s.isdigit() and len(s) not in (7, 9):
+        return False
+
+    return True
+
+
+def _extract_document_tokens(extracted_text):
+    """
+    יוצר סט של טוקנים אלפא-נומריים שמופיעים פיזית במסמך.
+    חשוב: משתמשים בהתאמה לטוקן שלם, לא ב-substring מכל המסמך,
+    כדי למנוע מצב שמקט מומצא נוצר מצירוף מקרי של מספרים סמוכים.
+    """
+    if not extracted_text:
+        return set()
+
+    text_upper = extracted_text.upper()
+
+    # טוקנים כמו 1215356, 1SDA066652R1, AF80-40-00-13, AT-1217139
+    raw_tokens = re.findall(r"[A-Z0-9][A-Z0-9_\-/.]{3,}[A-Z0-9]", text_upper)
+
+    normalized_tokens = set()
+    for token in raw_tokens:
+        clean_token = _normalize_sku(token)
+        if clean_token:
+            normalized_tokens.add(clean_token)
+
+    return normalized_tokens
+
+
+def _candidate_appears_as_document_token(candidate, document_tokens):
+    """
+    חומת אש נגד הזיות:
+    מקט יתקבל רק אם הוא מופיע פיזית במסמך כטוקן שלם.
+    לא בודקים substring בתוך כל המסמך.
+    """
+    if not candidate:
+        return False
+
+    clean_candidate = _normalize_sku(candidate)
+
+    if not clean_candidate:
+        return False
+
+    if clean_candidate in document_tokens:
+        return True
+
+    # אם הלקוח כתב AT-1217139 וה-AI החזיר 1217139, נאפשר רק עם תחילית מוכרת
+    for prefix in KNOWN_PREFIXES:
+        clean_prefix = _normalize_sku(prefix)
+        if f"{clean_prefix}{clean_candidate}" in document_tokens:
+            return True
+
+    return False
+
+
+def _strip_known_prefixes(candidate):
+    """
+    מסיר תחיליות מוכרות כמו AT- רק אחרי שהמחרוזת המקורית עברה בדיקת הופעה במסמך.
+    """
+    clean_candidate = _normalize_sku(candidate)
+
+    for prefix in KNOWN_PREFIXES:
+        clean_prefix = _normalize_sku(prefix)
+        if clean_candidate.startswith(clean_prefix):
+            return clean_candidate[len(clean_prefix):]
+
+    return clean_candidate
 
 
 def process_pdf(pdf_file, openai_api_key):
@@ -30,31 +224,39 @@ def process_pdf(pdf_file, openai_api_key):
     if not file_bytes:
         raise Exception("הקובץ שהועלה ריק.")
 
-    # מנוע קריאה מרחבי: שומר על העמודות והרווחים המדויקים של המסמך!
+    # מנוע קריאה מרחבי: שומר על העמודות והרווחים של המסמך ככל האפשר
     pdf_bytes_io = io.BytesIO(file_bytes)
     with pdfplumber.open(pdf_bytes_io) as pdf:
-        extracted_text = "\n".join([page.extract_text(layout=True) for page in pdf.pages])
+        extracted_text = "\n".join([
+            page.extract_text(layout=True) or ""
+            for page in pdf.pages
+        ])
+
+    document_tokens = _extract_document_tokens(extracted_text)
 
     client = OpenAI(api_key=openai_api_key)
 
-    # הפרומפט המשופר והקשוח
     system_instruction = (
-        "אתה מומחה לחילוץ נתונים מטבלאות הזמנות רכש מורכבות בעברית/אנגלית.\n"
-        "חוקים קריטיים להצלחה:\n"
-        "1. כמויות (qty): הכמות היא מספר. לעיתים קרובות מופיע לידה או מתחתיה הצירוף 'יח', 'יח.', 'יח'' או 'EA'. אם הכמות כתובה כ-'80.00' החזר '80'. אל תבלבל עם עמודת ה'שורה'!\n"
-        "2. מק\"טים (skus_found): חלץ את *כל* המחרוזות האלפנומריות בשורה שנראות כמו מק\"ט ספק או מק\"ט יצרן (למשל 1SDA0..., או 0025..., או AT-1217139). \n"
-        "**אזהרה קריטית:** התעלם לחלוטין ממספרי פרויקט שמתחילים ב-PR (כמו PR26E00489) - הם אינם מק\"טים ואסור להכניס אותם לרשימה!\n"
-        "3. אל תתייחס לנתונים בכותרת המסמך.\n"
-        "4. **סריקת סיכומים:** התעלם לחלוטין משורות של 'סיכום כמויות', 'סה\"כ' או ממספר הספק (510050). אל תיצור עבורם שורות פיקטיביות!\n"
-        "5. אם יש ספק לגבי הכמות, או שהיא חסרה, החזר מחרוזת ריקה \"\". אל תנחש.\n"
-        "6. **איסור המצאות (No Hallucinations):** חלץ מק\"טים אך ורק ממה שכתוב פיזית במסמך! לעולם אל תשער, תנחש או תמציא מק\"ט עבור שורות הובלה, משלוח או אספקה. אם לא מודפס מק\"ט בשורה, החזר רשימה ריקה."
+        "אתה מומחה לחילוץ נתונים מטבלאות הזמנות רכש בעברית/אנגלית.\n"
+        "המטרה שלך היא חילוץ בלבד - לא השלמה, לא ניחוש ולא תיקון לפי ידע כללי.\n\n"
+
+        "חוקים קריטיים:\n"
+        "1. חלץ רק שורות פריט מתוך טבלת ההזמנה. אל תיצור שורות מסיכומים, מע\"מ, מחיר כולל, תנאי תשלום או פרטי מסמך.\n"
+        "2. כמויות qty: הכמות היא מספר שמופיע לידו/תחתיו יח, יח', יח. או EA. אם הכמות כתובה 80.00 החזר 80. אם אין כמות ברורה החזר \"\".\n"
+        "3. skus_found: חלץ אך ורק מקטים שמופיעים פיזית בשורת הפריט. אסור להמציא, להשלים, לשער או להסיק מקט לפי תיאור המוצר.\n"
+        "4. אם בשורת פריט אין מקט מודפס, החזר skus_found=[] גם אם אפשר לנחש לפי התיאור.\n"
+        "5. התעלם לחלוטין ממספרי פרויקט שמתחילים ב-PR, מספרי ספק, מספרי דרישה, מספרי לקוח, תאריכים, מחירים, אחוזי הנחה וכמויות.\n"
+        "6. שורות אספקה/הובלה/משלוח/delivery/shipping/freight: אם אין מקט מודפס בשורה, החזר skus_found=[] והשאר רק את הכמות אם קיימת.\n"
+        "7. אל תבלבל בין עמודת שורה לבין כמות.\n"
+        "8. אם יש ספק - החזר פחות מידע, לא יותר. עדיף skus_found=[] מאשר מקט שגוי.\n"
     )
 
     completion = client.beta.chat.completions.parse(
         model="gpt-4o",
+        temperature=0,
         messages=[
             {"role": "system", "content": system_instruction},
-            {"role": "user", "content": f"להלן תוכן ההזמנה, חלץ את הפריטים:\n{extracted_text}"}
+            {"role": "user", "content": f"להלן תוכן ההזמנה. חלץ את שורות הפריטים בלבד:\n{extracted_text}"},
         ],
         response_format=PurchaseOrder,
     )
@@ -62,76 +264,70 @@ def process_pdf(pdf_file, openai_api_key):
     result = completion.choices[0].message.parsed
 
     items_list = []
+
     for item in result.items:
-        # --- חומת אש קפדנית נגד הזיות ---
+        description_text = item.product_description or ""
+        clean_qty = _clean_quantity(item.qty)
+
+        # לא להחזיר שורות סיכום בכלל
+        if _is_summary_or_noise_line(description_text):
+            print(f"🚫 דילוג על שורת סיכום/רעש: {description_text}")
+            continue
+
+        # שורות הובלה/אספקה/משלוח - לא מאפשרים ל-AI להשלים מקט.
+        # משאירים אותן ככתומות באקסל: מקט ריק + כמות אם קיימת.
+        if _is_logistics_or_service_line(description_text):
+            print(f"🚚 שורת אספקה/הובלה זוהתה - לא משלים מקט: {description_text}")
+            items_list.append({
+                "row_num": item.row_number,
+                "sku": "",
+                "qty": clean_qty,
+                "description": description_text,
+            })
+            continue
+
         valid_skus = []
+
         if item.skus_found:
-            for s in item.skus_found:
-                if s and not s.upper().startswith("PR"):
-                    # מנקים רק את המק"ט שה-AI מצא
-                    clean_s = s.replace(" ", "").replace("-", "")
+            for raw_candidate in item.skus_found:
+                if not _is_plausible_sku(raw_candidate):
+                    print(f"🚫 חסימת ערך שאינו נראה כמקט: '{raw_candidate}' בשורה {item.row_number}")
+                    continue
 
-                    # מסירים מקפים מהמסמך, אבל משאירים את הרווחים!
-                    text_without_hyphens = extracted_text.replace("-", "")
+                if not _candidate_appears_as_document_token(raw_candidate, document_tokens):
+                    print(f"🚫 חסימת הזיה: המקט '{raw_candidate}' לא מופיע כטוקן במסמך בשורה {item.row_number}")
+                    continue
 
-                    # בדיקה קפדנית: המק"ט חייב להופיע בשלמותו בטקסט
-                    if clean_s in text_without_hyphens or s in extracted_text:
-                        valid_skus.append(clean_s)  # מעבירים את המק"ט הנקי
-                    else:
-                        print(f"🚫 חסימת הזיה: ה-AI המציא את המק\"ט '{s}' בשורה {item.row_number}")
-        # ----------------------------------
+                clean_candidate = _strip_known_prefixes(raw_candidate)
+
+                if clean_candidate in BLOCKED_SKUS:
+                    print(f"🚫 חסימת מקט/מספר אסור: '{clean_candidate}' בשורה {item.row_number}")
+                    continue
+
+                if clean_candidate not in valid_skus:
+                    valid_skus.append(clean_candidate)
 
         chosen_sku = ""
         is_exact_match = False
 
-        # מעבר על המק"טים שה-AI זיהה כדי למצוא אחד שאכן קיים במסד הנתונים
+        # קודם כל מנסים למצוא התאמה ודאית ב-DB
         for candidate in valid_skus:
-            # 1. בדיקה ישירה מול מסד הנתונים
             if find_sku_in_db(candidate):
                 chosen_sku = candidate
                 is_exact_match = True
                 break
 
-            # 2. אם לא נמצא, ננסה להסיר תחיליות בעייתיות (כמו AT-) ולבדוק שוב
-            clean_candidate = candidate.upper().strip()
-            removed_prefix = False
-            for prefix in KNOWN_PREFIXES:
-                if clean_candidate.startswith(prefix):
-                    clean_candidate = clean_candidate[len(prefix):]  # חיתוך התחילית
-                    removed_prefix = True
-                    break
-
-            if removed_prefix:
-                # בדיקה מחדש מול מסד הנתונים ללא התחילית
-                if find_sku_in_db(clean_candidate):
-                    chosen_sku = clean_candidate  # שמירת המספר הנקי ללא הקידומת
-                    is_exact_match = True
-                    break
-
-        # חוסר התאמה מוחלט - ניקח את המחרוזת הארוכה ביותר כדי שלמשתמש תהיה אינדיקציה כלשהי באקסל
+        # אם יש מקט שהופיע פיזית במסמך אבל לא נמצא ב-DB:
+        # משאירים אותו באקסל כדי שהמשתמש יראה מה היה במסמך, אבל excel_handler יסמן כתום.
+        # לא בוחרים הכי ארוך ולא מנחשים.
         if not is_exact_match:
-            chosen_sku = max(valid_skus, key=len) if valid_skus else ""
-
-        # --- חסימת ברזל: העפת מספר הספק 510050 ---
-        if chosen_sku == "510050":
-            continue
-
-        # ניקוי הכמות (הסרת מילים כמו "יח" אם ה-AI הכניס אותן בטעות)
-        clean_qty = item.qty
-        if clean_qty:
-            clean_qty = re.sub(r'[^\d.]', '', clean_qty)  # משאיר רק ספרות ונקודה עשרונית
-            if clean_qty.endswith('.'):
-                clean_qty = clean_qty[:-1]
-            try:
-                # הופך "80.00" ל-"80"
-                clean_qty = str(int(float(clean_qty)))
-            except ValueError:
-                clean_qty = ""
+            chosen_sku = valid_skus[0] if valid_skus else ""
 
         items_list.append({
-            'row_num': item.row_number,
-            'sku': chosen_sku,
-            'qty': clean_qty
+            "row_num": item.row_number,
+            "sku": chosen_sku,
+            "qty": clean_qty,
+            "description": description_text,
         })
 
     return items_list, result.order_number
