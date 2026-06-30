@@ -63,20 +63,23 @@ def process_pdf(pdf_file, openai_api_key):
 
     items_list = []
     for item in result.items:
-        # סינון נוסף בפייתון למקרה שה-AI טעה והכניס מספר פרויקט
+        # --- חומת אש קפדנית נגד הזיות ---
         valid_skus = []
         if item.skus_found:
             for s in item.skus_found:
                 if s and not s.upper().startswith("PR"):
-                    # מנקים רווחים ומקפים כדי לבדוק בצורה חלקה
+                    # מנקים רק את המק"ט שה-AI מצא
                     clean_s = s.replace(" ", "").replace("-", "")
-                    clean_text = extracted_text.replace(" ", "").replace("-", "")
 
-                    # בדיקה קריטית: האם המספר שה-AI מצא באמת מופיע בטקסט של המסמך?
-                    if clean_s in clean_text:
-                        valid_skus.append(s)
+                    # מסירים מקפים מהמסמך, אבל משאירים את הרווחים!
+                    text_without_hyphens = extracted_text.replace("-", "")
+
+                    # בדיקה קפדנית: המק"ט חייב להופיע בשלמותו בטקסט
+                    if clean_s in text_without_hyphens or s in extracted_text:
+                        valid_skus.append(clean_s)  # מעבירים את המק"ט הנקי
                     else:
-                        print(f"🚫 המערכת חסמה מק\"ט שה-AI המציא (Hallucination): {s}")
+                        print(f"🚫 חסימת הזיה: ה-AI המציא את המק\"ט '{s}' בשורה {item.row_number}")
+        # ----------------------------------
 
         chosen_sku = ""
         is_exact_match = False
