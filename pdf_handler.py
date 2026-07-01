@@ -62,6 +62,23 @@ SUMMARY_KEYWORDS = [
     "תיחכונ הרודהמ",
 ]
 
+MIN_EXTRACTED_TEXT_CHARS = 80
+
+
+def _is_pdf_text_readable(extracted_text):
+    """
+    בדיקה האם ה-PDF מכיל שכבת טקסט אמיתית.
+    אם כמעט אין טקסט שחולץ - כנראה מדובר בסריקה/תמונה.
+    """
+    if not extracted_text:
+        return False
+
+    compact_text = re.sub(r"\s+", "", extracted_text)
+
+    # סופרים רק תווים שיש להם משמעות: אותיות/ספרות בעברית/אנגלית
+    meaningful_chars = re.findall(r"[A-Za-zא-ת0-9]", compact_text)
+
+    return len(meaningful_chars) >= MIN_EXTRACTED_TEXT_CHARS
 
 class OrderRow(BaseModel):
     row_number: int = Field(description="מספר השורה בטבלת ההזמנה")
@@ -288,7 +305,8 @@ def process_pdf(pdf_file, openai_api_key):
             page.extract_text(layout=True) or ""
             for page in pdf.pages
         ])
-
+    if not _is_pdf_text_readable(extracted_text):
+        raise ValueError("SCANNED_PDF_BLOCKED")
     document_tokens = _extract_document_tokens(extracted_text)
 
     if DEBUG_PDF_HANDLER:
