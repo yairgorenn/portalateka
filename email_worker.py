@@ -253,7 +253,7 @@ def check_and_process_emails():
 
                     except ValueError as ve:
                         if str(ve) == "SCANNED_PDF_BLOCKED":
-                            reply_body = "שלום,\n\nהמערכת זיהתה שהקובץ המצורף הוא מסמך סרוק או תמונה. פקה, ניתן לשלוח מסמכי PDF דיגיטליים מקוריים בלבד."
+                            reply_body = "שלום,\n\nהמערכת זיהתה שהקובץ המצורף הוא מסמך סרוק או תמונה.  ניתן לשלוח מסמכי PDF דיגיטליים מקוריים בלבד."
                         else:
                             reply_body = f"שגיאה בפענוח: {ve}"
                         send_reply_email(sender_email, "שגיאת פענוח מסמך 🛑", reply_body)
